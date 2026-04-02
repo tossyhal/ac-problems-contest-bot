@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ac-problems-contest-bot",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-04-03",
+  // Add D1, Durable Object, and secret bindings when external integration starts.
+  "observability": {
+    "enabled": true
+  }
+}
