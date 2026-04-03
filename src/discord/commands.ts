@@ -533,6 +533,104 @@ const ensureProblemCatalogReady = async (
   };
 };
 
+const startSubmissionSyncJob = async (
+  submissionSync: DurableObjectNamespace,
+  userId: string,
+) => {
+  const stub = submissionSync.get(submissionSync.idFromName(userId));
+  const response = await stub.fetch("https://submission-sync/start", {
+    method: "POST",
+    body: JSON.stringify({
+      userId,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("提出同期ジョブの開始に失敗しました。");
+  }
+};
+
+const ensureSubmissionSyncReadyForContest = async (
+  database: D1Database,
+  options: CommandOptions,
+  commandName: "custom-start" | "start",
+  userId: string,
+) => {
+  const currentSyncState = await getSubmissionSyncState(database);
+
+  if (
+    currentSyncState.status === "queued" ||
+    currentSyncState.status === "running"
+  ) {
+    return {
+      message:
+        "提出同期が実行中です。少し待ってからもう一度コマンドを実行してください。",
+      ready: false,
+    };
+  }
+
+  if (!currentSyncState.full_sync_completed_at) {
+    return {
+      message:
+        "提出同期が未完了です。/init action:run を先に実行してください。",
+      ready: false,
+    };
+  }
+
+  if (options.submissionSync) {
+    const result = await syncUserSubmissionsBatch({
+      database,
+      fetchFn: options.fetchFn,
+      userId,
+    });
+
+    if (result.status === "completed") {
+      return {
+        ready: true,
+      };
+    }
+
+    if (result.status === "failed") {
+      const failedState = await getSubmissionSyncState(database);
+
+      return {
+        message: `提出同期に失敗しました。${failedState.last_error ?? "エラー内容は不明です。"}`,
+        ready: false,
+      };
+    }
+
+    await startSubmissionSyncJob(options.submissionSync, userId);
+
+    return {
+      message: `提出情報の増分同期を開始しました。少し待ってから /${commandName} を再実行してください。`,
+      ready: false,
+    };
+  }
+
+  let result: Awaited<ReturnType<typeof syncUserSubmissionsBatch>> | undefined;
+
+  do {
+    result = await syncUserSubmissionsBatch({
+      database,
+      fetchFn: options.fetchFn,
+      userId,
+    });
+  } while (result.status === "running");
+
+  if (result.status === "failed") {
+    const failedState = await getSubmissionSyncState(database);
+
+    return {
+      message: `提出同期に失敗しました。${failedState.last_error ?? "エラー内容は不明です。"}`,
+      ready: false,
+    };
+  }
+
+  return {
+    ready: true,
+  };
+};
+
 const runContestCreation = async (
   database: D1Database,
   options: CommandOptions,
@@ -544,7 +642,9 @@ const runContestCreation = async (
     unsolvedOnly: boolean;
   },
 ) => {
-  if (!input.setting.atcoder_user_id) {
+  const atcoderUserId = input.setting.atcoder_user_id;
+
+  if (!atcoderUserId) {
     return createResponse(
       "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
     );
@@ -554,11 +654,16 @@ const runContestCreation = async (
     return createResponse("ATCODER_PROBLEMS_TOKEN が未設定です。");
   }
 
-  const submissionSyncState = await getSubmissionSyncState(database);
+  const submissionSyncResult = await ensureSubmissionSyncReadyForContest(
+    database,
+    options,
+    input.commandName,
+    atcoderUserId,
+  );
 
-  if (submissionSyncState.status !== "completed") {
+  if (!submissionSyncResult.ready) {
     return createResponse(
-      "提出同期が未完了です。/init action:run を先に実行してください。",
+      submissionSyncResult.message ?? "提出同期の確認に失敗しました。",
     );
   }
 
@@ -844,19 +949,10 @@ const handleInit = async (
 
     if (options.submissionSync) {
       await markSyncQueued(database);
-      const stub = options.submissionSync.get(
-        options.submissionSync.idFromName(setting.atcoder_user_id),
+      await startSubmissionSyncJob(
+        options.submissionSync,
+        setting.atcoder_user_id,
       );
-      const response = await stub.fetch("https://submission-sync/start", {
-        method: "POST",
-        body: JSON.stringify({
-          userId: setting.atcoder_user_id,
-        }),
-      });
-
-      if (!response.ok) {
-        return createResponse("初期同期ジョブの開始に失敗しました。");
-      }
 
       return createResponse(
         [
