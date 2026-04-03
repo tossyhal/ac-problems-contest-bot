@@ -23,6 +23,21 @@ export const settings = sqliteTable("settings", {
   })
     .notNull()
     .default(false),
+  includeAbc: integer("include_abc", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(true),
+  includeArc: integer("include_arc", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(true),
+  includeAgc: integer("include_agc", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(true),
   allowOtherSources: integer("allow_other_sources", {
     mode: "boolean",
   })
@@ -41,6 +56,34 @@ export const settings = sqliteTable("settings", {
     .notNull()
     .defaultNow(),
 });
+
+export const settingDifficultyBands = sqliteTable(
+  "setting_difficulty_bands",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    settingId: integer("setting_id")
+      .notNull()
+      .references(() => settings.id),
+    sortOrder: integer("sort_order").notNull(),
+    difficultyMin: integer("difficulty_min").notNull(),
+    difficultyMax: integer("difficulty_max").notNull(),
+    problemCount: integer("problem_count").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    settingSortOrderIdx: uniqueIndex(
+      "setting_difficulty_bands_setting_sort_order_idx",
+    ).on(table.settingId, table.sortOrder),
+    settingIdIdx: index("setting_difficulty_bands_setting_id_idx").on(
+      table.settingId,
+    ),
+  }),
+);
 
 export const syncStates = sqliteTable("sync_states", {
   scope: text("scope").primaryKey(),
@@ -131,6 +174,7 @@ export const commandLogs = sqliteTable(
 
 export const schema = {
   settings,
+  settingDifficultyBands,
   syncStates,
   solvedProblems,
   contestRuns,
