@@ -44,7 +44,10 @@ app.openapi(healthRoute, (c) => c.json({ ok: true }, 200));
 // Discord interaction は署名検証付きの webhook 受け口として扱うため、
 // 現時点では公開 OpenAPI には載せない。
 app.post("/discord/interactions", async (c) => {
-  const handler = createDiscordInteractionHandler(c.env?.DISCORD_PUBLIC_KEY);
+  const handler = createDiscordInteractionHandler(
+    c.env?.DISCORD_PUBLIC_KEY,
+    c.env?.DB,
+  );
 
   return handler(c.req.raw);
 });

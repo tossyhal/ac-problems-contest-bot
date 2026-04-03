@@ -1,13 +1,8 @@
 const encoder = new TextEncoder();
 
-const commandResponseContent = {
-  start: "デフォルト設定でのバチャ作成は未実装です。",
-  "custom-start": "条件を上書きしたバチャ作成は未実装です。",
-  setting: "デフォルト設定の表示と更新は未実装です。",
-  init: "初期同期の実行と状態確認は未実装です。",
-} as const;
+import { handleDiscordCommand } from "./commands";
 
-const knownCommands = new Set(Object.keys(commandResponseContent));
+const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
 
 type DiscordPingInteraction = {
   type: 1;
@@ -82,7 +77,8 @@ const isApplicationCommandInteraction = (
   interaction.type === 2;
 
 export const createDiscordInteractionHandler =
-  (publicKeyHex: string | undefined) => async (request: Request) => {
+  (publicKeyHex: string | undefined, database: D1Database) =>
+  async (request: Request) => {
     if (!publicKeyHex) {
       return Response.json(
         {
@@ -113,15 +109,7 @@ export const createDiscordInteractionHandler =
       isApplicationCommandInteraction(interaction) &&
       knownCommands.has(interaction.data.name)
     ) {
-      return Response.json({
-        type: 4,
-        data: {
-          content:
-            commandResponseContent[
-              interaction.data.name as keyof typeof commandResponseContent
-            ],
-        },
-      });
+      return handleDiscordCommand(database, interaction);
     }
 
     return Response.json(

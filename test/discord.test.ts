@@ -9,6 +9,57 @@ const toHex = (value: ArrayBuffer) =>
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
+const createMockDatabase = () => {
+  let settingRecord: null | Record<string, unknown> = null;
+
+  return {
+    prepare: (query: string) => ({
+      bind: (...params: unknown[]) => ({
+        first: async () => {
+          if (
+            query.includes("FROM sync_states") &&
+            params[0] === "submissions"
+          ) {
+            return null;
+          }
+
+          return null;
+        },
+        run: async () => {
+          if (query.includes("INSERT INTO settings")) {
+            settingRecord = {
+              atcoder_user_id: params[1],
+              default_slot_minutes: params[2],
+              default_problem_count: params[3],
+              default_contest_duration_minutes: params[4],
+              default_penalty_seconds: params[5],
+              include_experimental_difficulty: params[6],
+              include_abc: params[7],
+              include_arc: params[8],
+              include_agc: params[9],
+              allow_other_sources: params[10],
+              exclude_recently_used_days: params[11],
+              visibility: params[12],
+              title_template: params[13],
+              memo_template: params[14],
+            };
+          }
+
+          return { success: true };
+        },
+      }),
+      first: async () => {
+        if (query.includes("FROM settings")) {
+          return settingRecord;
+        }
+
+        return null;
+      },
+      all: async () => ({ results: [] }),
+    }),
+  } as unknown as D1Database;
+};
+
 const createSignedDiscordRequest = async (payload: unknown) => {
   const keyPair = (await crypto.subtle.generateKey("Ed25519", true, [
     "sign",
@@ -29,7 +80,7 @@ const createSignedDiscordRequest = async (payload: unknown) => {
   return {
     body,
     env: {
-      DB: {} as D1Database,
+      DB: createMockDatabase(),
       DISCORD_PUBLIC_KEY: toHex(publicKey),
     },
     headers: {
@@ -99,5 +150,126 @@ describe("discord interactions", () => {
         content: "デフォルト設定でのバチャ作成は未実装です。",
       },
     });
+  });
+
+  it("shows current settings from D1 defaults", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "setting",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "show",
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("現在のデフォルト設定:");
+    expect(body.data.content).toContain("AtCoder user ID: 未設定");
+    expect(body.data.content).toContain("難易度帯: 未設定");
+  });
+
+  it("shows current sync status from D1 defaults", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "init",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "status",
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("現在の同期状態:");
+    expect(body.data.content).toContain("status: idle");
+    expect(body.data.content).toContain("last error: なし");
+  });
+
+  it("updates settings and shows persisted values", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "setting",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "update",
+          },
+          {
+            name: "atcoder-user-id",
+            type: 3,
+            value: "tossyhal",
+          },
+          {
+            name: "problem-count",
+            type: 4,
+            value: 7,
+          },
+          {
+            name: "include-abc",
+            type: 5,
+            value: false,
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("デフォルト設定を更新しました。");
+    expect(body.data.content).toContain("AtCoder user ID: tossyhal");
+    expect(body.data.content).toContain("問題数: 7");
+    expect(body.data.content).toContain("ABC=OFF");
   });
 });
