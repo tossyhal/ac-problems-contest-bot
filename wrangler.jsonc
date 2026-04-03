@@ -15,6 +15,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "CONTEST_CREATION_GUARD",
+        "class_name": "ContestCreationGuardDurableObject"
+      },
+      {
         "name": "PROBLEM_CATALOG_SYNC",
         "class_name": "ProblemCatalogSyncDurableObject"
       },
@@ -32,6 +36,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["ProblemCatalogSyncDurableObject"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["ContestCreationGuardDurableObject"]
     }
   ],
   "observability": {

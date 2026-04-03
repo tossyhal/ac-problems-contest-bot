@@ -6,6 +6,7 @@ import { createDiscordInteractionHandler } from "./discord/handler";
 export type Env = {
   Bindings: {
     ATCODER_PROBLEMS_TOKEN?: string;
+    CONTEST_CREATION_GUARD?: DurableObjectNamespace;
     DB: D1Database;
     DISCORD_PUBLIC_KEY?: string;
     PROBLEM_CATALOG_SYNC?: DurableObjectNamespace;
@@ -49,6 +50,7 @@ app.openapi(healthRoute, (c) => c.json({ ok: true }, 200));
 app.post("/discord/interactions", async (c) => {
   const handler = createDiscordInteractionHandler(
     c.env?.ATCODER_PROBLEMS_TOKEN,
+    c.env?.CONTEST_CREATION_GUARD,
     c.env?.DISCORD_PUBLIC_KEY,
     c.env?.DB,
     c.env?.PROBLEM_CATALOG_SYNC,

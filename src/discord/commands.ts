@@ -1,4 +1,3 @@
-import { createContest } from "../atcoder-problems/contest";
 import {
   getProblemCatalogStats,
   getProblemCatalogSyncState,
@@ -10,6 +9,7 @@ import {
   markSyncQueued,
   syncUserSubmissionsBatch,
 } from "../atcoder-problems/submissions";
+import { executeContestCreation } from "../contest-creation/service";
 import { selectProblems } from "../problem-selection/select";
 
 type DiscordCommandOption = {
@@ -56,6 +56,7 @@ type DifficultyBandRecord = {
 
 type CommandOptions = {
   atCoderProblemsToken?: string;
+  contestCreationGuard?: DurableObjectNamespace;
   fetchFn?: typeof fetch;
   problemCatalogSync?: DurableObjectNamespace;
   submissionSync?: DurableObjectNamespace;
@@ -416,92 +417,6 @@ const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
     point: (index + 1) * 100,
   }));
 
-const createRunKey = () => `${Date.now()}:${crypto.randomUUID()}`;
-
-const insertContestRun = async (
-  database: D1Database,
-  input: {
-    dedupeKey: string;
-    requestFingerprint: string;
-    startedAt: number;
-  },
-) => {
-  const result = await database
-    .prepare(
-      `INSERT INTO contest_runs (
-        request_fingerprint,
-        dedupe_key,
-        status,
-        started_at
-      ) VALUES (?, ?, ?, ?)`,
-    )
-    .bind(input.requestFingerprint, input.dedupeKey, "running", input.startedAt)
-    .run<{ meta?: { last_row_id?: number } }>();
-
-  return Number(result.meta?.last_row_id ?? 0);
-};
-
-const updateContestRun = async (
-  database: D1Database,
-  input: {
-    contestId?: string;
-    contestRunId: number;
-    contestUrl?: string;
-    errorMessage?: string;
-    status: string;
-  },
-) => {
-  await database
-    .prepare(
-      `UPDATE contest_runs
-      SET
-        status = ?,
-        contest_url = ?,
-        contest_id = ?,
-        error_message = ?,
-        updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))
-      WHERE id = ?`,
-    )
-    .bind(
-      input.status,
-      input.contestUrl ?? null,
-      input.contestId ?? null,
-      input.errorMessage ?? null,
-      input.contestRunId,
-    )
-    .run();
-};
-
-const insertProblemUsageLogs = async (
-  database: D1Database,
-  input: {
-    contestRunId: number;
-    problemIds: string[];
-    usedAt: number;
-  },
-) => {
-  const statements = input.problemIds.map((problemId) =>
-    database
-      .prepare(
-        `INSERT INTO problem_usage_logs (
-          problem_id,
-          used_at,
-          contest_run_id
-        ) VALUES (?, ?, ?)`,
-      )
-      .bind(problemId, input.usedAt, input.contestRunId),
-  );
-
-  if ("batch" in database && typeof database.batch === "function") {
-    await database.batch(statements);
-    return;
-  }
-
-  for (const statement of statements) {
-    await statement.run();
-  }
-};
-
 const insertCommandLog = async (
   database: D1Database,
   input: {
@@ -655,8 +570,6 @@ const runContestCreation = async (
     );
   }
 
-  let contestRunId: number | null = null;
-
   try {
     const selectedProblems = await selectProblems({
       database,
@@ -681,51 +594,68 @@ const runContestCreation = async (
         visibility: input.setting.visibility,
       }),
     );
-    contestRunId = await insertContestRun(database, {
-      dedupeKey: createRunKey(),
-      requestFingerprint,
-      startedAt: Date.now(),
-    });
-    const createdContest = await createContest(options.fetchFn ?? fetch, {
-      durationSecond: input.setting.default_contest_duration_minutes * 60,
-      isPublic: input.setting.visibility === "public",
-      memo,
-      penaltySecond: input.setting.default_penalty_seconds,
-      problems: createContestProblemsPayload(selectedProblems),
-      sleepMs: options.fetchFn ? 0 : undefined,
+    const settingsSummary = JSON.stringify({
+      difficultyBands: input.difficultyBands,
+      problemIds: selectedProblems.map((problem) => problem.problem_id),
       startEpochSecond,
-      title,
-      token: options.atCoderProblemsToken,
     });
+    const createdContest = options.contestCreationGuard
+      ? await options.contestCreationGuard
+          .get(options.contestCreationGuard.idFromName(requestFingerprint))
+          .fetch("https://contest-creation-guard/create", {
+            method: "POST",
+            body: JSON.stringify({
+              commandContext: input.commandContext,
+              commandName: input.commandName,
+              durationSecond:
+                input.setting.default_contest_duration_minutes * 60,
+              isPublic: input.setting.visibility === "public",
+              memo,
+              penaltySecond: input.setting.default_penalty_seconds,
+              problemIds: selectedProblems.map((problem) => problem.problem_id),
+              problems: createContestProblemsPayload(selectedProblems),
+              requestFingerprint,
+              settingsSummary,
+              startEpochSecond,
+              startTimeMs: startTime.getTime(),
+              title,
+            }),
+          })
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error(await response.text());
+            }
 
-    await Promise.all([
-      updateContestRun(database, {
-        contestId: createdContest.contestId,
-        contestRunId,
-        contestUrl: createdContest.contestUrl,
-        status: "completed",
-      }),
-      insertProblemUsageLogs(database, {
-        contestRunId,
-        problemIds: selectedProblems.map((problem) => problem.problem_id),
-        usedAt: startTime.getTime(),
-      }),
-      insertCommandLog(database, {
-        commandContext: input.commandContext,
-        commandName: input.commandName,
-        message: createdContest.contestUrl,
-        settingsSummary: JSON.stringify({
-          difficultyBands: input.difficultyBands,
+            return (await response.json()) as {
+              contestId: string;
+              contestUrl: string;
+              reused: boolean;
+            };
+          })
+      : await executeContestCreation(database, {
+          atCoderProblemsToken: options.atCoderProblemsToken,
+          commandContext: input.commandContext,
+          commandName: input.commandName,
+          durationSecond: input.setting.default_contest_duration_minutes * 60,
+          fetchFn: options.fetchFn,
+          isPublic: input.setting.visibility === "public",
+          memo,
+          penaltySecond: input.setting.default_penalty_seconds,
           problemIds: selectedProblems.map((problem) => problem.problem_id),
+          problems: createContestProblemsPayload(selectedProblems),
+          requestFingerprint,
+          settingsSummary,
           startEpochSecond,
-        }),
-        status: "completed",
-      }),
-    ]);
+          startTimeMs: startTime.getTime(),
+          title,
+        });
 
     return createResponse(
       [
         createdContest.contestUrl,
+        createdContest.reused
+          ? "既存のバチャを再利用しました。"
+          : "バチャを作成しました。",
         `開始時刻: ${startTime.toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" })} JST`,
       ].join("\n"),
     );
@@ -733,20 +663,14 @@ const runContestCreation = async (
     const message =
       error instanceof Error ? error.message : "バチャ作成に失敗しました。";
 
-    if (contestRunId !== null) {
-      await updateContestRun(database, {
-        contestRunId,
-        errorMessage: message,
+    if (!options.contestCreationGuard) {
+      await insertCommandLog(database, {
+        commandContext: input.commandContext,
+        commandName: input.commandName,
+        message,
         status: "failed",
       });
     }
-
-    await insertCommandLog(database, {
-      commandContext: input.commandContext,
-      commandName: input.commandName,
-      message,
-      status: "failed",
-    });
 
     return createResponse(message);
   }
