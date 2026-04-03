@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - develop
-      - main
 
 permissions:
   contents: read
@@ -16,25 +15,4 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup mise
-        uses: jdx/mise-action@v2
-        with:
-          install: true
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint and format check
-        run: pnpm check
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
+    uses: ./.github/workflows/checks.yml
