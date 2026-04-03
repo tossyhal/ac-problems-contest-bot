@@ -1,6 +1,6 @@
-const encoder = new TextEncoder();
-
 import { handleDiscordCommand } from "./commands";
+
+const encoder = new TextEncoder();
 
 const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
 
@@ -77,7 +77,11 @@ const isApplicationCommandInteraction = (
   interaction.type === 2;
 
 export const createDiscordInteractionHandler =
-  (publicKeyHex: string | undefined, database: D1Database) =>
+  (
+    publicKeyHex: string | undefined,
+    database: D1Database | undefined,
+    executionContext?: ExecutionContext,
+  ) =>
   async (request: Request) => {
     if (!publicKeyHex) {
       return Response.json(
@@ -109,7 +113,9 @@ export const createDiscordInteractionHandler =
       isApplicationCommandInteraction(interaction) &&
       knownCommands.has(interaction.data.name)
     ) {
-      return handleDiscordCommand(database, interaction);
+      return handleDiscordCommand(database, interaction, {
+        executionContext,
+      });
     }
 
     return Response.json(

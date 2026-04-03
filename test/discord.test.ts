@@ -13,6 +13,7 @@ const createMockDatabase = () => {
   let settingRecord: null | Record<string, unknown> = null;
   let difficultyBandRecords: Record<string, unknown>[] = [];
   let syncStateRecord: null | Record<string, unknown> = null;
+  let solvedProblemRecords: Record<string, unknown>[] = [];
 
   return {
     prepare: (query: string) => ({
@@ -22,7 +23,7 @@ const createMockDatabase = () => {
             query.includes("FROM sync_states") &&
             params[0] === "submissions"
           ) {
-            return null;
+            return syncStateRecord;
           }
 
           return null;
@@ -72,6 +73,22 @@ const createMockDatabase = () => {
             };
           }
 
+          if (query.includes("INSERT INTO solved_problems")) {
+            solvedProblemRecords = solvedProblemRecords.filter(
+              (record) =>
+                !(
+                  record.atcoder_user_id === params[0] &&
+                  record.problem_id === params[1]
+                ),
+            );
+            solvedProblemRecords.push({
+              atcoder_user_id: params[0],
+              problem_id: params[1],
+              solved_at: params[2],
+              synced_at: params[3],
+            });
+          }
+
           return { success: true };
         },
       }),
@@ -91,13 +108,20 @@ const createMockDatabase = () => {
           return { results: difficultyBandRecords };
         }
 
+        if (query.includes("FROM solved_problems")) {
+          return { results: solvedProblemRecords };
+        }
+
         return { results: [] };
       },
     }),
   } as unknown as D1Database;
 };
 
-const createSignedDiscordRequest = async (payload: unknown) => {
+const createSignedDiscordRequest = async (
+  payload: unknown,
+  database: D1Database = createMockDatabase(),
+) => {
   const keyPair = (await crypto.subtle.generateKey("Ed25519", true, [
     "sign",
     "verify",
@@ -117,7 +141,7 @@ const createSignedDiscordRequest = async (payload: unknown) => {
   return {
     body,
     env: {
-      DB: createMockDatabase(),
+      DB: database,
       DISCORD_PUBLIC_KEY: toHex(publicKey),
     },
     headers: {
@@ -260,19 +284,77 @@ describe("discord interactions", () => {
   });
 
   it("runs init and persists sync status", async () => {
-    const request = await createSignedDiscordRequest({
-      type: 2,
-      data: {
-        name: "init",
-        options: [
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify([
           {
-            name: "action",
-            type: 3,
-            value: "run",
+            id: 1,
+            epoch_second: 1712131200,
+            problem_id: "abc100_a",
+            result: "AC",
           },
-        ],
+          {
+            id: 2,
+            epoch_second: 1712131201,
+            problem_id: "abc100_b",
+            result: "WA",
+          },
+        ]),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    const database = createMockDatabase();
+    const updateRequest = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "setting",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "update",
+            },
+            {
+              name: "atcoder-user-id",
+              type: 3,
+              value: "tossyhal",
+            },
+          ],
+        },
       },
-    });
+      database,
+    );
+    await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: updateRequest.headers,
+        body: updateRequest.body,
+      },
+      updateRequest.env,
+    );
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "init",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "run",
+            },
+          ],
+        },
+      },
+      database,
+    );
     const response = await app.request(
       "http://localhost/discord/interactions",
       {
@@ -286,12 +368,13 @@ describe("discord interactions", () => {
       data: { content: string };
       type: number;
     };
+    globalThis.fetch = originalFetch;
 
     expect(response.status).toBe(200);
     expect(body.type).toBe(4);
-    expect(body.data.content).toContain("初期同期を完了扱いで初期化しました。");
+    expect(body.data.content).toContain("初期同期を完了しました。");
     expect(body.data.content).toContain("status: completed");
-    expect(body.data.content).toContain("last checkpoint: bootstrap");
+    expect(body.data.content).toContain("last checkpoint: 1712131201");
   });
 
   it("updates settings and shows persisted values", async () => {

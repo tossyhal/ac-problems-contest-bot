@@ -1,3 +1,5 @@
+import { syncUserSubmissions } from "../atcoder-problems/submissions";
+
 type DiscordCommandOption = {
   name: string;
   type: number;
@@ -47,6 +49,11 @@ type SyncStateRecord = {
   last_checkpoint: string | null;
   last_success_checkpoint: string | null;
   last_error: string | null;
+};
+
+type CommandOptions = {
+  executionContext?: ExecutionContext;
+  fetchFn?: typeof fetch;
 };
 
 const defaultSettingRecord: SettingRecord = {
@@ -203,42 +210,6 @@ const getSyncState = async (database: D1Database) => {
       last_error: null,
     }
   );
-};
-
-const upsertSyncState = async (
-  database: D1Database,
-  syncState: SyncStateRecord,
-) => {
-  await database
-    .prepare(
-      `INSERT INTO sync_states (
-        scope,
-        status,
-        full_sync_completed_at,
-        last_synced_at,
-        last_checkpoint,
-        last_success_checkpoint,
-        last_error
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(scope) DO UPDATE SET
-        status = excluded.status,
-        full_sync_completed_at = excluded.full_sync_completed_at,
-        last_synced_at = excluded.last_synced_at,
-        last_checkpoint = excluded.last_checkpoint,
-        last_success_checkpoint = excluded.last_success_checkpoint,
-        last_error = excluded.last_error,
-        updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))`,
-    )
-    .bind(
-      "submissions",
-      syncState.status,
-      syncState.full_sync_completed_at,
-      syncState.last_synced_at,
-      syncState.last_checkpoint,
-      syncState.last_success_checkpoint,
-      syncState.last_error,
-    )
-    .run();
 };
 
 const replaceDifficultyBands = async (
@@ -522,29 +493,47 @@ const handleSetting = async (
 const handleInit = async (
   database: D1Database,
   interaction: DiscordApplicationCommandInteraction,
+  options: CommandOptions,
 ) => {
   const action = getOptionValue(interaction, "action");
 
   if (action === "run") {
-    const now = Date.now();
-    const nextSyncState: SyncStateRecord = {
-      status: "completed",
-      full_sync_completed_at: now,
-      last_synced_at: now,
-      last_checkpoint: "bootstrap",
-      last_success_checkpoint: "bootstrap",
-      last_error: null,
-    };
+    const setting = await getSettingRecord(database);
 
-    await upsertSyncState(database, nextSyncState);
+    if (!setting.atcoder_user_id) {
+      return createResponse(
+        "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
+      );
+    }
+
+    const syncPromise = syncUserSubmissions({
+      database,
+      userId: setting.atcoder_user_id,
+      fetchFn: options.fetchFn,
+    });
+
+    if (options.executionContext) {
+      options.executionContext.waitUntil(syncPromise);
+
+      return createResponse(
+        [
+          "初期同期を開始しました。",
+          "進捗と結果は /init action:status で確認してください。",
+        ].join("\n"),
+      );
+    }
+
+    await syncPromise;
+
+    const syncState = await getSyncState(database);
 
     return createResponse(
       [
-        "初期同期を完了扱いで初期化しました。",
-        `status: ${nextSyncState.status}`,
-        `full sync completed at: ${formatTimestamp(nextSyncState.full_sync_completed_at)}`,
-        `last synced at: ${formatTimestamp(nextSyncState.last_synced_at)}`,
-        `last checkpoint: ${nextSyncState.last_checkpoint}`,
+        "初期同期を完了しました。",
+        `status: ${syncState.status}`,
+        `full sync completed at: ${formatTimestamp(syncState.full_sync_completed_at)}`,
+        `last synced at: ${formatTimestamp(syncState.last_synced_at)}`,
+        `last checkpoint: ${syncState.last_checkpoint ?? "未設定"}`,
       ].join("\n"),
     );
   }
@@ -566,6 +555,7 @@ const handleInit = async (
 export const handleDiscordCommand = async (
   database: D1Database | undefined,
   interaction: DiscordApplicationCommandInteraction,
+  options: CommandOptions = {},
 ) => {
   switch (interaction.data.name) {
     case "start":
@@ -591,7 +581,7 @@ export const handleDiscordCommand = async (
           { status: 500 },
         );
       }
-      return handleInit(database, interaction);
+      return handleInit(database, interaction, options);
     default:
       return Response.json(
         {
