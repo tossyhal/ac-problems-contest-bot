@@ -59,6 +59,8 @@ pnpm db:generate
 ## Discord
 
 Discord interaction の署名検証には `DISCORD_PUBLIC_KEY` secret が必要です。
+`/start` と `/custom-start` で AtCoder Problems のバチャを実際に作成するには、
+`ATCODER_PROBLEMS_TOKEN` も必要です。
 
 開発用 guild に slash command を登録するには、`.dev.vars` に
 `DISCORD_APPLICATION_ID`、`DISCORD_BOT_TOKEN`、`DISCORD_GUILD_ID` を設定したうえで以下を実行します。

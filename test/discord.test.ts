@@ -9,11 +9,27 @@ const toHex = (value: ArrayBuffer) =>
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
-const createMockDatabase = () => {
-  let settingRecord: null | Record<string, unknown> = null;
-  let difficultyBandRecords: Record<string, unknown>[] = [];
-  let syncStateRecord: null | Record<string, unknown> = null;
-  let solvedProblemRecords: Record<string, unknown>[] = [];
+const createMockDatabase = (
+  seed: {
+    difficultyBandRecords?: Record<string, unknown>[];
+    problemCatalogRecords?: Record<string, unknown>[];
+    problemUsageLogRecords?: Record<string, unknown>[];
+    settingRecord?: null | Record<string, unknown>;
+    solvedProblemRecords?: Record<string, unknown>[];
+    syncStateRecords?: Record<string, Record<string, unknown> | null>;
+  } = {},
+) => {
+  let settingRecord: null | Record<string, unknown> =
+    seed.settingRecord ?? null;
+  let difficultyBandRecords = [...(seed.difficultyBandRecords ?? [])];
+  const syncStateRecords: Record<string, Record<string, unknown> | null> = {
+    ...(seed.syncStateRecords ?? {}),
+  };
+  let solvedProblemRecords = [...(seed.solvedProblemRecords ?? [])];
+  const problemCatalogRecords = [...(seed.problemCatalogRecords ?? [])];
+  const problemUsageLogRecords = [...(seed.problemUsageLogRecords ?? [])];
+  const contestRunRecords: Record<string, unknown>[] = [];
+  const commandLogRecords: Record<string, unknown>[] = [];
 
   return {
     batch: async (statements: { run: () => Promise<unknown> }[]) => {
@@ -26,14 +42,26 @@ const createMockDatabase = () => {
     prepare: (query: string) => ({
       bind: (...params: unknown[]) => ({
         first: async () => {
-          if (
-            query.includes("FROM sync_states") &&
-            params[0] === "submissions"
-          ) {
-            return syncStateRecord;
+          if (query.includes("FROM sync_states")) {
+            return syncStateRecords[String(params[0])] ?? null;
           }
 
           return null;
+        },
+        all: async () => {
+          if (query.includes("FROM solved_problems")) {
+            return { results: solvedProblemRecords };
+          }
+
+          if (query.includes("FROM problem_usage_logs")) {
+            return {
+              results: problemUsageLogRecords.filter(
+                (record) => Number(record.used_at) >= Number(params[0]),
+              ),
+            };
+          }
+
+          return { results: [] };
         },
         run: async () => {
           if (query.includes("INSERT INTO settings")) {
@@ -70,7 +98,7 @@ const createMockDatabase = () => {
           }
 
           if (query.includes("INSERT INTO sync_states")) {
-            syncStateRecord = {
+            syncStateRecords[String(params[0])] = {
               status: params[1],
               full_sync_completed_at: params[2],
               last_synced_at: params[3],
@@ -96,6 +124,55 @@ const createMockDatabase = () => {
             });
           }
 
+          if (query.includes("INSERT INTO contest_runs")) {
+            const nextId = contestRunRecords.length + 1;
+            contestRunRecords.push({
+              id: nextId,
+              request_fingerprint: params[0],
+              dedupe_key: params[1],
+              status: params[2],
+              started_at: params[3],
+            });
+
+            return {
+              meta: {
+                last_row_id: nextId,
+              },
+              success: true,
+            };
+          }
+
+          if (query.includes("UPDATE contest_runs")) {
+            const contestRun = contestRunRecords.find(
+              (record) => record.id === params[4],
+            );
+
+            if (contestRun) {
+              contestRun.status = params[0];
+              contestRun.contest_url = params[1];
+              contestRun.contest_id = params[2];
+              contestRun.error_message = params[3];
+            }
+          }
+
+          if (query.includes("INSERT INTO problem_usage_logs")) {
+            problemUsageLogRecords.push({
+              contest_run_id: params[2],
+              problem_id: params[0],
+              used_at: params[1],
+            });
+          }
+
+          if (query.includes("INSERT INTO command_logs")) {
+            commandLogRecords.push({
+              command_context: params[1],
+              command_name: params[0],
+              message: params[4],
+              settings_summary: params[3],
+              status: params[2],
+            });
+          }
+
           return { success: true };
         },
       }),
@@ -105,7 +182,11 @@ const createMockDatabase = () => {
         }
 
         if (query.includes("FROM sync_states")) {
-          return syncStateRecord;
+          return syncStateRecords.submissions ?? null;
+        }
+
+        if (query.includes("COUNT(*) AS count FROM problem_catalog")) {
+          return { count: problemCatalogRecords.length };
         }
 
         return null;
@@ -117,6 +198,10 @@ const createMockDatabase = () => {
 
         if (query.includes("FROM solved_problems")) {
           return { results: solvedProblemRecords };
+        }
+
+        if (query.includes("FROM problem_catalog")) {
+          return { results: problemCatalogRecords };
         }
 
         return { results: [] };
@@ -224,6 +309,114 @@ describe("discord interactions", () => {
       },
     });
   });
+
+  it("creates contest from selected problems on start", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+        {
+          contest_id: "abc100",
+          difficulty: 920,
+          is_experimental: 0,
+          problem_id: "abc100_b",
+          problem_index: "B",
+          source_category: "ABC",
+          title: "B",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 2,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/internal-api/contest/create")) {
+        return Response.json({
+          contest_id: "contest-123",
+        });
+      }
+
+      if (url.endsWith("/internal-api/contest/item/update")) {
+        return new Response(null, {
+          status: 200,
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
+    );
+    expect(body.data.content).toContain("開始時刻:");
+  }, 10000);
 
   it("shows current settings from D1 defaults", async () => {
     const request = await createSignedDiscordRequest({

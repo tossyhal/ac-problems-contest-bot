@@ -78,6 +78,7 @@ const isApplicationCommandInteraction = (
 
 export const createDiscordInteractionHandler =
   (
+    atCoderProblemsToken: string | undefined,
     publicKeyHex: string | undefined,
     database: D1Database | undefined,
     problemCatalogSync: DurableObjectNamespace | undefined,
@@ -115,6 +116,7 @@ export const createDiscordInteractionHandler =
       knownCommands.has(interaction.data.name)
     ) {
       return handleDiscordCommand(database, interaction, {
+        atCoderProblemsToken,
         problemCatalogSync,
         submissionSync,
       });

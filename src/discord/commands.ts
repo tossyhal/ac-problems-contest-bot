@@ -1,3 +1,4 @@
+import { createContest } from "../atcoder-problems/contest";
 import {
   getProblemCatalogStats,
   getProblemCatalogSyncState,
@@ -54,6 +55,7 @@ type DifficultyBandRecord = {
 };
 
 type CommandOptions = {
+  atCoderProblemsToken?: string;
   fetchFn?: typeof fetch;
   problemCatalogSync?: DurableObjectNamespace;
   submissionSync?: DurableObjectNamespace;
@@ -338,23 +340,197 @@ const createResponse = (content: string) =>
     },
   });
 
-const createProblemSelectionSummary = (
-  problems: {
-    contest_id: string;
-    difficulty: null | number;
-    problem_id: string;
-    title: string;
-  }[],
-  title: string,
-) =>
-  [
-    title,
-    ...problems.map(
-      (problem, index) =>
-        `${index + 1}. ${problem.problem_id} / ${problem.title} / ${problem.contest_id} / difficulty=${problem.difficulty ?? "unknown"}`,
-    ),
-    "問題選定まで完了しました。コンテスト作成は未実装です。",
-  ].join("\n");
+const createHash = async (value: string) => {
+  const encoded = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const createContestTitle = (
+  setting: SettingRecord,
+  startTime: Date,
+  selectedProblems: { title: string }[],
+) => {
+  const startDate = startTime.toLocaleDateString("sv-SE", {
+    timeZone: "Asia/Tokyo",
+  });
+  const startDateTime = startTime.toLocaleString("sv-SE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const defaultTitle = `Practice Contest ${startDateTime}`;
+
+  if (!setting.title_template) {
+    return defaultTitle;
+  }
+
+  return setting.title_template
+    .replaceAll("{startDate}", startDate)
+    .replaceAll("{startDateTime}", startDateTime)
+    .replaceAll("{problemCount}", String(selectedProblems.length));
+};
+
+const createContestMemo = (setting: SettingRecord, startTime: Date) => {
+  const startDateTime = startTime.toLocaleString("sv-SE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  if (!setting.memo_template) {
+    return "";
+  }
+
+  return setting.memo_template.replaceAll("{startDateTime}", startDateTime);
+};
+
+const getNextStartTime = (slotMinutes: number) => {
+  const now = new Date();
+  const next = new Date(now.getTime());
+
+  next.setSeconds(0, 0);
+
+  const minutes = next.getMinutes();
+  const remainder = minutes % slotMinutes;
+  const addMinutes = remainder === 0 ? slotMinutes : slotMinutes - remainder;
+
+  next.setMinutes(minutes + addMinutes);
+
+  return next;
+};
+
+const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
+  problems.map((problem, index) => ({
+    id: problem.problem_id,
+    order: index,
+    point: (index + 1) * 100,
+  }));
+
+const createRunKey = () => `${Date.now()}:${crypto.randomUUID()}`;
+
+const insertContestRun = async (
+  database: D1Database,
+  input: {
+    dedupeKey: string;
+    requestFingerprint: string;
+    startedAt: number;
+  },
+) => {
+  const result = await database
+    .prepare(
+      `INSERT INTO contest_runs (
+        request_fingerprint,
+        dedupe_key,
+        status,
+        started_at
+      ) VALUES (?, ?, ?, ?)`,
+    )
+    .bind(input.requestFingerprint, input.dedupeKey, "running", input.startedAt)
+    .run<{ meta?: { last_row_id?: number } }>();
+
+  return Number(result.meta?.last_row_id ?? 0);
+};
+
+const updateContestRun = async (
+  database: D1Database,
+  input: {
+    contestId?: string;
+    contestRunId: number;
+    contestUrl?: string;
+    errorMessage?: string;
+    status: string;
+  },
+) => {
+  await database
+    .prepare(
+      `UPDATE contest_runs
+      SET
+        status = ?,
+        contest_url = ?,
+        contest_id = ?,
+        error_message = ?,
+        updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))
+      WHERE id = ?`,
+    )
+    .bind(
+      input.status,
+      input.contestUrl ?? null,
+      input.contestId ?? null,
+      input.errorMessage ?? null,
+      input.contestRunId,
+    )
+    .run();
+};
+
+const insertProblemUsageLogs = async (
+  database: D1Database,
+  input: {
+    contestRunId: number;
+    problemIds: string[];
+    usedAt: number;
+  },
+) => {
+  const statements = input.problemIds.map((problemId) =>
+    database
+      .prepare(
+        `INSERT INTO problem_usage_logs (
+          problem_id,
+          used_at,
+          contest_run_id
+        ) VALUES (?, ?, ?)`,
+      )
+      .bind(problemId, input.usedAt, input.contestRunId),
+  );
+
+  if ("batch" in database && typeof database.batch === "function") {
+    await database.batch(statements);
+    return;
+  }
+
+  for (const statement of statements) {
+    await statement.run();
+  }
+};
+
+const insertCommandLog = async (
+  database: D1Database,
+  input: {
+    commandContext?: string;
+    commandName: string;
+    message?: string;
+    settingsSummary?: string;
+    status: string;
+  },
+) => {
+  await database
+    .prepare(
+      `INSERT INTO command_logs (
+        command_name,
+        command_context,
+        status,
+        settings_summary,
+        message
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      input.commandName,
+      input.commandContext ?? null,
+      input.status,
+      input.settingsSummary ?? null,
+      input.message ?? null,
+    )
+    .run();
+};
 
 const buildCustomStartSetting = (
   interaction: DiscordApplicationCommandInteraction,
@@ -442,13 +618,25 @@ const ensureProblemCatalogReady = async (
   };
 };
 
-const handleStart = async (database: D1Database, options: CommandOptions) => {
-  const setting = await getSettingRecord(database);
-
-  if (!setting.atcoder_user_id) {
+const runContestCreation = async (
+  database: D1Database,
+  options: CommandOptions,
+  input: {
+    commandName: "custom-start" | "start";
+    commandContext?: string;
+    difficultyBands: DifficultyBandRecord[];
+    setting: SettingRecord;
+    unsolvedOnly: boolean;
+  },
+) => {
+  if (!input.setting.atcoder_user_id) {
     return createResponse(
       "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
     );
+  }
+
+  if (!options.atCoderProblemsToken) {
+    return createResponse("ATCODER_PROBLEMS_TOKEN が未設定です。");
   }
 
   const submissionSyncState = await getSubmissionSyncState(database);
@@ -463,25 +651,114 @@ const handleStart = async (database: D1Database, options: CommandOptions) => {
 
   if (catalogResult.queued) {
     return createResponse(
-      "問題カタログ同期を開始しました。少し待ってから /start を再実行してください。",
+      `問題カタログ同期を開始しました。少し待ってから /${input.commandName} を再実行してください。`,
     );
   }
 
-  const difficultyBands = await getDifficultyBands(database);
-  const selectedProblems = await selectProblems({
-    database,
-    difficultyBands,
-    settings: setting,
-    userId: setting.atcoder_user_id,
-  });
+  let contestRunId: number | null = null;
 
-  return createResponse(
-    createProblemSelectionSummary(
+  try {
+    const selectedProblems = await selectProblems({
+      database,
+      difficultyBands: input.difficultyBands,
+      settings: input.setting,
+      unsolvedOnly: input.unsolvedOnly,
+      userId: input.setting.atcoder_user_id,
+    });
+    const startTime = getNextStartTime(input.setting.default_slot_minutes);
+    const startEpochSecond = Math.floor(startTime.getTime() / 1000);
+    const title = createContestTitle(
+      input.setting,
+      startTime,
       selectedProblems,
-      "デフォルト設定から選定した問題一覧:",
-    ),
-  );
+    );
+    const memo = createContestMemo(input.setting, startTime);
+    const requestFingerprint = await createHash(
+      JSON.stringify({
+        difficultyBands: input.difficultyBands,
+        problemIds: selectedProblems.map((problem) => problem.problem_id),
+        startEpochSecond,
+        visibility: input.setting.visibility,
+      }),
+    );
+    contestRunId = await insertContestRun(database, {
+      dedupeKey: createRunKey(),
+      requestFingerprint,
+      startedAt: Date.now(),
+    });
+    const createdContest = await createContest(options.fetchFn ?? fetch, {
+      durationSecond: input.setting.default_contest_duration_minutes * 60,
+      isPublic: input.setting.visibility === "public",
+      memo,
+      penaltySecond: input.setting.default_penalty_seconds,
+      problems: createContestProblemsPayload(selectedProblems),
+      sleepMs: options.fetchFn ? 0 : undefined,
+      startEpochSecond,
+      title,
+      token: options.atCoderProblemsToken,
+    });
+
+    await Promise.all([
+      updateContestRun(database, {
+        contestId: createdContest.contestId,
+        contestRunId,
+        contestUrl: createdContest.contestUrl,
+        status: "completed",
+      }),
+      insertProblemUsageLogs(database, {
+        contestRunId,
+        problemIds: selectedProblems.map((problem) => problem.problem_id),
+        usedAt: startTime.getTime(),
+      }),
+      insertCommandLog(database, {
+        commandContext: input.commandContext,
+        commandName: input.commandName,
+        message: createdContest.contestUrl,
+        settingsSummary: JSON.stringify({
+          difficultyBands: input.difficultyBands,
+          problemIds: selectedProblems.map((problem) => problem.problem_id),
+          startEpochSecond,
+        }),
+        status: "completed",
+      }),
+    ]);
+
+    return createResponse(
+      [
+        createdContest.contestUrl,
+        `開始時刻: ${startTime.toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" })} JST`,
+      ].join("\n"),
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "バチャ作成に失敗しました。";
+
+    if (contestRunId !== null) {
+      await updateContestRun(database, {
+        contestRunId,
+        errorMessage: message,
+        status: "failed",
+      });
+    }
+
+    await insertCommandLog(database, {
+      commandContext: input.commandContext,
+      commandName: input.commandName,
+      message,
+      status: "failed",
+    });
+
+    return createResponse(message);
+  }
 };
+
+const handleStart = async (database: D1Database, options: CommandOptions) =>
+  runContestCreation(database, options, {
+    commandName: "start",
+    difficultyBands: await getDifficultyBands(database),
+    setting: await getSettingRecord(database),
+    unsolvedOnly: true,
+  });
 
 const createSettingSummary = (
   setting: SettingRecord,
@@ -528,49 +805,19 @@ const handleCustomStart = async (
   options: CommandOptions,
 ) => {
   const currentSetting = await getSettingRecord(database);
-
-  if (!currentSetting.atcoder_user_id) {
-    return createResponse(
-      "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
-    );
-  }
-
-  const submissionSyncState = await getSubmissionSyncState(database);
-
-  if (submissionSyncState.status !== "completed") {
-    return createResponse(
-      "提出同期が未完了です。/init action:run を先に実行してください。",
-    );
-  }
-
-  const catalogResult = await ensureProblemCatalogReady(database, options);
-
-  if (catalogResult.queued) {
-    return createResponse(
-      "問題カタログ同期を開始しました。少し待ってから /custom-start を再実行してください。",
-    );
-  }
-
   const customSetting = buildCustomStartSetting(interaction, currentSetting);
   const difficultyBandsInput = getStringOption(interaction, "difficulty-bands");
   const difficultyBands =
     difficultyBandsInput === undefined
       ? await getDifficultyBands(database)
       : parseDifficultyBands(difficultyBandsInput);
-  const selectedProblems = await selectProblems({
-    database,
+  return runContestCreation(database, options, {
+    commandContext: JSON.stringify(interaction.data.options ?? []),
+    commandName: "custom-start",
     difficultyBands,
-    settings: customSetting,
+    setting: customSetting,
     unsolvedOnly: getBooleanOption(interaction, "unsolved-only") ?? true,
-    userId: customSetting.atcoder_user_id,
   });
-
-  return createResponse(
-    createProblemSelectionSummary(
-      selectedProblems,
-      "今回条件で選定した問題一覧:",
-    ),
-  );
 };
 
 const handleSetting = async (
