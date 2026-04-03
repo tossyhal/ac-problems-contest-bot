@@ -207,13 +207,6 @@ export const executeContestCreation = async (
       });
     }
 
-    await insertCommandLog(database, {
-      commandContext: input.commandContext,
-      commandName: input.commandName,
-      message,
-      status: "failed",
-    });
-
     throw error;
   }
 };
