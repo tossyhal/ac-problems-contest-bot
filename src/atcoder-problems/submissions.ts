@@ -200,6 +200,11 @@ const getStartFromSecond = (syncState: SyncStateRecord) => {
   return Math.max(0, checkpoint - 1);
 };
 
+const getCompletedAtTimestamp = (
+  initialSyncState: SyncStateRecord,
+  completedAt: number,
+) => initialSyncState.full_sync_completed_at ?? completedAt;
+
 export const markSyncQueued = async (database: D1Database, userId: string) => {
   const currentSyncState = await getSyncState(database, userId);
 
@@ -249,7 +254,7 @@ export const syncUserSubmissionsBatch = async ({
     if (submissions.length === 0) {
       await upsertSyncState(database, userId, {
         status: "completed",
-        full_sync_completed_at: now,
+        full_sync_completed_at: getCompletedAtTimestamp(initialSyncState, now),
         last_synced_at: now,
         last_checkpoint: previousCheckpoint,
         last_success_checkpoint: previousCheckpoint,
@@ -281,7 +286,7 @@ export const syncUserSubmissionsBatch = async ({
       status: nextStatus,
       full_sync_completed_at:
         nextStatus === "completed"
-          ? now
+          ? getCompletedAtTimestamp(initialSyncState, now)
           : initialSyncState.full_sync_completed_at,
       last_synced_at: now,
       last_checkpoint: lastCheckpoint,

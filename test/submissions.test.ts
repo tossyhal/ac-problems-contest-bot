@@ -143,6 +143,32 @@ describe("submission sync", () => {
     expect(syncState.full_sync_completed_at).toBe(completedAt);
   });
 
+  it("preserves the original full sync completion timestamp when incremental sync finds no new submissions", async () => {
+    const completedAt = Date.now() - 60_000;
+    const database = createSubmissionDatabase({
+      syncState: {
+        full_sync_completed_at: completedAt,
+        last_checkpoint: "100",
+        last_error: null,
+        last_success_checkpoint: "100",
+        last_synced_at: completedAt,
+        status: "completed",
+      },
+    });
+
+    const result = await syncUserSubmissionsBatch({
+      database,
+      fetchFn: async () => Response.json([]),
+      userId: "tossyhal",
+    });
+
+    const syncState = await getSyncState(database, "tossyhal");
+
+    expect(result.status).toBe("completed");
+    expect(syncState.status).toBe("completed");
+    expect(syncState.full_sync_completed_at).toBe(completedAt);
+  });
+
   it("preserves the earliest AC timestamp when the same problem is solved again", async () => {
     const firstSolvedAt = 1_700_000_000_000;
     const database = createSubmissionDatabase({
