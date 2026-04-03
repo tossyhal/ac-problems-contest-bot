@@ -205,6 +205,42 @@ const getSyncState = async (database: D1Database) => {
   );
 };
 
+const upsertSyncState = async (
+  database: D1Database,
+  syncState: SyncStateRecord,
+) => {
+  await database
+    .prepare(
+      `INSERT INTO sync_states (
+        scope,
+        status,
+        full_sync_completed_at,
+        last_synced_at,
+        last_checkpoint,
+        last_success_checkpoint,
+        last_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scope) DO UPDATE SET
+        status = excluded.status,
+        full_sync_completed_at = excluded.full_sync_completed_at,
+        last_synced_at = excluded.last_synced_at,
+        last_checkpoint = excluded.last_checkpoint,
+        last_success_checkpoint = excluded.last_success_checkpoint,
+        last_error = excluded.last_error,
+        updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))`,
+    )
+    .bind(
+      "submissions",
+      syncState.status,
+      syncState.full_sync_completed_at,
+      syncState.last_synced_at,
+      syncState.last_checkpoint,
+      syncState.last_success_checkpoint,
+      syncState.last_error,
+    )
+    .run();
+};
+
 const replaceDifficultyBands = async (
   database: D1Database,
   difficultyBands: DifficultyBandRecord[],
@@ -490,8 +526,26 @@ const handleInit = async (
   const action = getOptionValue(interaction, "action");
 
   if (action === "run") {
+    const now = Date.now();
+    const nextSyncState: SyncStateRecord = {
+      status: "completed",
+      full_sync_completed_at: now,
+      last_synced_at: now,
+      last_checkpoint: "bootstrap",
+      last_success_checkpoint: "bootstrap",
+      last_error: null,
+    };
+
+    await upsertSyncState(database, nextSyncState);
+
     return createResponse(
-      "init run は未実装です。まずは status のみ対応しています。",
+      [
+        "初期同期を完了扱いで初期化しました。",
+        `status: ${nextSyncState.status}`,
+        `full sync completed at: ${formatTimestamp(nextSyncState.full_sync_completed_at)}`,
+        `last synced at: ${formatTimestamp(nextSyncState.last_synced_at)}`,
+        `last checkpoint: ${nextSyncState.last_checkpoint}`,
+      ].join("\n"),
     );
   }
 

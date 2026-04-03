@@ -12,6 +12,7 @@ const toHex = (value: ArrayBuffer) =>
 const createMockDatabase = () => {
   let settingRecord: null | Record<string, unknown> = null;
   let difficultyBandRecords: Record<string, unknown>[] = [];
+  let syncStateRecord: null | Record<string, unknown> = null;
 
   return {
     prepare: (query: string) => ({
@@ -60,12 +61,27 @@ const createMockDatabase = () => {
             });
           }
 
+          if (query.includes("INSERT INTO sync_states")) {
+            syncStateRecord = {
+              status: params[1],
+              full_sync_completed_at: params[2],
+              last_synced_at: params[3],
+              last_checkpoint: params[4],
+              last_success_checkpoint: params[5],
+              last_error: params[6],
+            };
+          }
+
           return { success: true };
         },
       }),
       first: async () => {
         if (query.includes("FROM settings")) {
           return settingRecord;
+        }
+
+        if (query.includes("FROM sync_states")) {
+          return syncStateRecord;
         }
 
         return null;
@@ -241,6 +257,41 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain("現在の同期状態:");
     expect(body.data.content).toContain("status: idle");
     expect(body.data.content).toContain("last error: なし");
+  });
+
+  it("runs init and persists sync status", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "init",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "run",
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("初期同期を完了扱いで初期化しました。");
+    expect(body.data.content).toContain("status: completed");
+    expect(body.data.content).toContain("last checkpoint: bootstrap");
   });
 
   it("updates settings and shows persisted values", async () => {
