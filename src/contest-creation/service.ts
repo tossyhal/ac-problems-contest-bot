@@ -1,4 +1,7 @@
-import { createContest } from "../atcoder-problems/contest";
+import {
+  createContest,
+  PartialContestCreationError,
+} from "../atcoder-problems/contest";
 import { insertCommandLog } from "../db/command-log";
 import { selectProblems } from "../problem-selection/select";
 
@@ -212,6 +215,23 @@ export const findCompletedContestRunByFingerprint = async (
     .bind(requestFingerprint)
     .first<ContestRunRecord>();
 
+const findLatestPersistedContestRunByFingerprint = async (
+  database: D1Database,
+  requestFingerprint: string,
+) =>
+  database
+    .prepare(
+      `SELECT id, status, contest_url, contest_id
+      FROM contest_runs
+      WHERE request_fingerprint = ?
+        AND contest_url IS NOT NULL
+        AND contest_id IS NOT NULL
+      ORDER BY id DESC
+      LIMIT 1`,
+    )
+    .bind(requestFingerprint)
+    .first<ContestRunRecord>();
+
 export const executeContestCreation = async (
   database: D1Database,
   input: ExecuteContestCreationInput,
@@ -227,6 +247,21 @@ export const executeContestCreation = async (
       contestUrl: existingRun.contest_url,
       reused: true,
     };
+  }
+
+  const existingPersistedRun = await findLatestPersistedContestRunByFingerprint(
+    database,
+    input.requestFingerprint,
+  );
+
+  if (
+    existingPersistedRun?.contest_url &&
+    existingPersistedRun.contest_id &&
+    existingPersistedRun.status !== "completed"
+  ) {
+    throw new Error(
+      `以前のバチャ作成が部分的に失敗しています。AtCoder Problems 側の状態を確認してください: ${existingPersistedRun.contest_url}`,
+    );
   }
 
   let contestRunId: number | null = null;
@@ -301,9 +336,20 @@ export const executeContestCreation = async (
 
     if (contestRunId !== null) {
       await updateContestRun(database, {
+        contestId:
+          error instanceof PartialContestCreationError
+            ? error.contestId
+            : undefined,
         contestRunId,
+        contestUrl:
+          error instanceof PartialContestCreationError
+            ? error.contestUrl
+            : undefined,
         errorMessage: message,
-        status: "failed",
+        status:
+          error instanceof PartialContestCreationError
+            ? "partial_failed"
+            : "failed",
       });
     }
 

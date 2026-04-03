@@ -184,4 +184,54 @@ describe("submission sync", () => {
       }),
     );
   });
+
+  it("splits solved problem upserts into chunks of 100 for D1 batch", async () => {
+    const database = createSubmissionDatabase({
+      syncState: {
+        full_sync_completed_at: null,
+        last_checkpoint: "0",
+        last_error: null,
+        last_success_checkpoint: "0",
+        last_synced_at: null,
+        status: "idle",
+      },
+    });
+    const batchSizes: number[] = [];
+    (
+      database as unknown as {
+        batch: (
+          statements: { run: () => Promise<unknown> }[],
+        ) => Promise<unknown[]>;
+      }
+    ).batch = async (statements) => {
+      batchSizes.push(statements.length);
+
+      if (statements.length > 100) {
+        throw new Error("too many statements");
+      }
+
+      for (const statement of statements) {
+        await statement.run();
+      }
+
+      return [];
+    };
+
+    const result = await syncUserSubmissionsBatch({
+      database,
+      fetchFn: async () =>
+        Response.json(
+          Array.from({ length: 500 }, (_, index) => ({
+            epoch_second: 1_700_000_000 + index,
+            id: index + 1,
+            problem_id: `abc100_${index}`,
+            result: "AC",
+          })),
+        ),
+      userId: "tossyhal",
+    });
+
+    expect(result.status).toBe("running");
+    expect(batchSizes).toEqual([100, 100, 100, 100, 100]);
+  });
 });

@@ -25,7 +25,7 @@ mise install
 pnpm install --frozen-lockfile
 ```
 
-`.dev.vars` は [`.dev.vars.example`](/home/hal/develop/ac-problems-contest-bot/.dev.vars.example) を元に作成します。
+`.dev.vars` は [`.dev.vars.example`](./.dev.vars.example) を元に作成します。
 
 ```bash
 cp .dev.vars.example .dev.vars

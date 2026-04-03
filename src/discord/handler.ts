@@ -52,18 +52,16 @@ export const verifyDiscordRequest = async (
     return null;
   }
 
-  const timestampMs = Number(timestamp) * 1000;
+  const body = await request.text();
+  let publicKey: CryptoKey;
 
-  if (
-    !Number.isFinite(timestampMs) ||
-    Math.abs(Date.now() - timestampMs) > discordRequestToleranceMs
-  ) {
-    return null;
+  try {
+    publicKey = await importDiscordPublicKey(publicKeyHex);
+  } catch {
+    throw new Error("DISCORD_PUBLIC_KEY is invalid.");
   }
 
   try {
-    const body = await request.text();
-    const publicKey = await importDiscordPublicKey(publicKeyHex);
     const isValid = await crypto.subtle.verify(
       "Ed25519",
       publicKey,
@@ -72,6 +70,15 @@ export const verifyDiscordRequest = async (
     );
 
     if (!isValid) {
+      return null;
+    }
+
+    const timestampMs = Number(timestamp) * 1000;
+
+    if (
+      !Number.isFinite(timestampMs) ||
+      Math.abs(Date.now() - timestampMs) > discordRequestToleranceMs
+    ) {
       return null;
     }
 
@@ -158,7 +165,21 @@ export const createDiscordInteractionHandler =
       );
     }
 
-    const verifiedBody = await verifyDiscordRequest(request, publicKeyHex);
+    let verifiedBody: null | string;
+
+    try {
+      verifiedBody = await verifyDiscordRequest(request, publicKeyHex);
+    } catch (error) {
+      return Response.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Discord signature verification failed.",
+        },
+        { status: 500 },
+      );
+    }
 
     if (!verifiedBody) {
       return Response.json(

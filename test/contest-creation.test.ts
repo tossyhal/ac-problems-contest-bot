@@ -31,15 +31,15 @@ const createContestDatabase = (options?: {
     prepare: (query: string) => ({
       bind: (...params: unknown[]) => ({
         first: async () => {
-          if (
-            query.includes("FROM contest_runs") &&
-            query.includes("status = 'completed'")
-          ) {
+          if (query.includes("FROM contest_runs")) {
             return (
               contestRuns.find(
                 (record) =>
                   record.request_fingerprint === params[0] &&
-                  record.status === "completed",
+                  (!query.includes("status = 'completed'") ||
+                    record.status === "completed") &&
+                  (!query.includes("contest_url IS NOT NULL") ||
+                    (record.contest_url && record.contest_id)),
               ) ?? null
             );
           }
@@ -256,5 +256,85 @@ describe("contest creation", () => {
         status: "completed",
       }),
     );
+  });
+
+  it("blocks retries when contest creation partially failed after contest/create", async () => {
+    const database = createContestDatabase();
+
+    await expect(
+      executeContestCreation(database, {
+        atCoderProblemsToken: "token",
+        commandName: "start",
+        difficultyBands: [],
+        durationSecond: 600,
+        fetchFn: async (input: RequestInfo | URL) => {
+          const url = String(input);
+
+          if (url.endsWith("/internal-api/contest/create")) {
+            return Response.json({
+              contest_id: "contest-partial",
+            });
+          }
+
+          if (url.endsWith("/internal-api/contest/item/update")) {
+            return new Response("update failed", {
+              status: 500,
+            });
+          }
+
+          throw new Error(`Unexpected fetch: ${url}`);
+        },
+        isPublic: false,
+        memo: "",
+        penaltySecond: 300,
+        requestFingerprint: "fingerprint-partial",
+        settings: {
+          allow_other_sources: 0,
+          default_problem_count: 1,
+          exclude_recently_used_days: 14,
+          include_abc: 1,
+          include_agc: 0,
+          include_arc: 0,
+          include_experimental_difficulty: 0,
+          next_contest_sequence: 1,
+        },
+        settingsSummary: "{}",
+        startEpochSecond: 1_700_000_000,
+        startTimeMs: 1_700_000_000_000,
+        unsolvedOnly: true,
+        userId: "tossyhal",
+      }),
+    ).rejects.toThrow("partial contest");
+
+    await expect(
+      executeContestCreation(database, {
+        atCoderProblemsToken: "token",
+        commandName: "start",
+        difficultyBands: [],
+        durationSecond: 600,
+        fetchFn: async () => {
+          throw new Error("should not create another contest");
+        },
+        isPublic: false,
+        memo: "",
+        penaltySecond: 300,
+        requestFingerprint: "fingerprint-partial",
+        settings: {
+          allow_other_sources: 0,
+          default_problem_count: 1,
+          exclude_recently_used_days: 14,
+          include_abc: 1,
+          include_agc: 0,
+          include_arc: 0,
+          include_experimental_difficulty: 0,
+          next_contest_sequence: 1,
+        },
+        settingsSummary: "{}",
+        startEpochSecond: 1_700_000_000,
+        startTimeMs: 1_700_000_000_000,
+        unsolvedOnly: true,
+        userId: "tossyhal",
+      }),
+    ).rejects.toThrow("以前のバチャ作成が部分的に失敗しています。");
   });
 });

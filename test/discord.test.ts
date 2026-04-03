@@ -333,15 +333,14 @@ describe("discord interactions", () => {
   });
 
   it("rejects stale signed Discord requests", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
+    const staleTimestamp = String(
+      Math.floor((Date.now() - 10 * 60 * 1000) / 1000),
+    );
     const request = await createSignedDiscordRequest(
       { type: 1 },
       createMockDatabase(),
       {
-        timestamp: String(
-          Math.floor(new Date("2026-04-03T11:50:00.000Z").getTime() / 1000),
-        ),
+        timestamp: staleTimestamp,
       },
     );
     const response = await app.request(
@@ -378,6 +377,30 @@ describe("discord interactions", () => {
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({
       error: "Invalid Discord signature.",
+    });
+  });
+
+  it("returns 500 when DISCORD_PUBLIC_KEY is invalid", async () => {
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-signature-ed25519": "00",
+          "x-signature-timestamp": String(Math.floor(Date.now() / 1000)),
+        },
+        body: JSON.stringify({ type: 1 }),
+      },
+      {
+        DB: createMockDatabase(),
+        DISCORD_PUBLIC_KEY: "abc",
+      },
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "DISCORD_PUBLIC_KEY is invalid.",
     });
   });
 

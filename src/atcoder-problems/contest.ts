@@ -14,6 +14,21 @@ type CreateContestInput = {
   sleepMs?: number;
 };
 
+export class PartialContestCreationError extends Error {
+  contestId: string;
+  contestUrl: string;
+
+  constructor(
+    message: string,
+    input: { contestId: string; contestUrl: string },
+  ) {
+    super(message);
+    this.name = "PartialContestCreationError";
+    this.contestId = input.contestId;
+    this.contestUrl = input.contestUrl;
+  }
+}
+
 type CreateContestResponse = {
   contest_id?: string;
 };
@@ -69,23 +84,36 @@ export const createContest = async (
     throw new Error("contest/create failed: missing contest_id");
   }
 
+  const contestUrl = `${contestBaseUrl}/#/contest/show/${contestId}`;
   await sleep(input.sleepMs ?? atCoderProblemsRequestIntervalMs);
 
-  const updateResponse = await fetchFn(
-    `${contestBaseUrl}/internal-api/contest/item/update`,
-    {
-      method: "POST",
-      headers: createHeaders(input.token),
-      body: JSON.stringify({
-        contest_id: contestId,
-        problems: input.problems,
-      }),
-    },
-  );
-  await ensureOk(updateResponse, "contest/item/update");
+  try {
+    const updateResponse = await fetchFn(
+      `${contestBaseUrl}/internal-api/contest/item/update`,
+      {
+        method: "POST",
+        headers: createHeaders(input.token),
+        body: JSON.stringify({
+          contest_id: contestId,
+          problems: input.problems,
+        }),
+      },
+    );
+    await ensureOk(updateResponse, "contest/item/update");
+  } catch (error) {
+    throw new PartialContestCreationError(
+      error instanceof Error
+        ? `${error.message} (partial contest: ${contestUrl})`
+        : `contest/item/update failed (partial contest: ${contestUrl})`,
+      {
+        contestId,
+        contestUrl,
+      },
+    );
+  }
 
   return {
     contestId,
-    contestUrl: `${contestBaseUrl}/#/contest/show/${contestId}`,
+    contestUrl,
   };
 };

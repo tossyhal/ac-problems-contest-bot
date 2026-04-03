@@ -141,13 +141,17 @@ const upsertSolvedProblems = async (
     createSolvedProblemStatement(database, syncedAt, userId, submission),
   );
 
-  if ("batch" in database && typeof database.batch === "function") {
-    await database.batch(statements);
-    return;
-  }
+  for (let index = 0; index < statements.length; index += 100) {
+    const chunk = statements.slice(index, index + 100);
 
-  for (const statement of statements) {
-    await statement.run();
+    if ("batch" in database && typeof database.batch === "function") {
+      await database.batch(chunk);
+      continue;
+    }
+
+    for (const statement of chunk) {
+      await statement.run();
+    }
   }
 };
 
