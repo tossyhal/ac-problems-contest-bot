@@ -11,20 +11,30 @@ type ContestCreationRequest = {
   commandContext?: string;
   commandName: "custom-start" | "start";
   durationSecond: number;
+  difficultyBands: {
+    difficulty_max: number;
+    difficulty_min: number;
+    problem_count: number;
+  }[];
   isPublic: boolean;
   memo: string;
   penaltySecond: number;
-  problemIds: string[];
-  problems: {
-    id: string;
-    order: number;
-    point: number;
-  }[];
   requestFingerprint: string;
+  settings: {
+    allow_other_sources: number;
+    default_problem_count: number;
+    exclude_recently_used_days: number;
+    include_abc: number;
+    include_agc: number;
+    include_arc: number;
+    include_experimental_difficulty: number;
+  };
   settingsSummary: string;
   startEpochSecond: number;
   startTimeMs: number;
   title: string;
+  unsolvedOnly: boolean;
+  userId: string;
 };
 
 export class ContestCreationGuardDurableObject extends DurableObject<ContestCreationEnv> {

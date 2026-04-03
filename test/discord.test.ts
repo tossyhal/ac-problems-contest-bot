@@ -643,9 +643,16 @@ describe("discord interactions", () => {
     const requestFingerprint = await createSha256Hex(
       JSON.stringify({
         difficultyBands: [],
-        problemIds: ["abc100_a"],
+        excludeRecentlyUsedDays: 14,
         startEpochSecond,
+        unsolvedOnly: true,
+        userId: "tossyhal",
         visibility: "private",
+        includeAbc: 1,
+        includeAgc: 0,
+        includeArc: 0,
+        includeExperimentalDifficulty: 0,
+        allowOtherSources: 0,
       }),
     );
     const database = createMockDatabase({

@@ -1,10 +1,21 @@
 import { createContest } from "../atcoder-problems/contest";
 import { insertCommandLog } from "../db/command-log";
+import { selectProblems } from "../problem-selection/select";
 
-type ContestProblemPayload = {
-  id: string;
-  order: number;
-  point: number;
+type DifficultyBandRecord = {
+  difficulty_max: number;
+  difficulty_min: number;
+  problem_count: number;
+};
+
+type ProblemSelectionSettings = {
+  allow_other_sources: number;
+  default_problem_count: number;
+  exclude_recently_used_days: number;
+  include_abc: number;
+  include_agc: number;
+  include_arc: number;
+  include_experimental_difficulty: number;
 };
 
 type ExecuteContestCreationInput = {
@@ -12,17 +23,19 @@ type ExecuteContestCreationInput = {
   commandContext?: string;
   commandName: "custom-start" | "start";
   durationSecond: number;
+  difficultyBands: DifficultyBandRecord[];
   fetchFn?: typeof fetch;
   isPublic: boolean;
   memo: string;
   penaltySecond: number;
-  problemIds: string[];
-  problems: ContestProblemPayload[];
   requestFingerprint: string;
+  settings: ProblemSelectionSettings;
   settingsSummary: string;
   startEpochSecond: number;
   startTimeMs: number;
   title: string;
+  unsolvedOnly: boolean;
+  userId: string;
 };
 
 type ContestRunRecord = {
@@ -33,6 +46,13 @@ type ContestRunRecord = {
 };
 
 const createRunKey = () => `${Date.now()}:${crypto.randomUUID()}`;
+
+const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
+  problems.map((problem, index) => ({
+    id: problem.problem_id,
+    order: index,
+    point: (index + 1) * 100,
+  }));
 
 const insertContestRun = async (
   database: D1Database,
@@ -158,12 +178,19 @@ export const executeContestCreation = async (
       requestFingerprint: input.requestFingerprint,
       startedAt: Date.now(),
     });
+    const selectedProblems = await selectProblems({
+      database,
+      difficultyBands: input.difficultyBands,
+      settings: input.settings,
+      unsolvedOnly: input.unsolvedOnly,
+      userId: input.userId,
+    });
     const createdContest = await createContest(input.fetchFn ?? fetch, {
       durationSecond: input.durationSecond,
       isPublic: input.isPublic,
       memo: input.memo,
       penaltySecond: input.penaltySecond,
-      problems: input.problems,
+      problems: createContestProblemsPayload(selectedProblems),
       sleepMs: input.fetchFn ? 0 : undefined,
       startEpochSecond: input.startEpochSecond,
       title: input.title,
@@ -179,7 +206,7 @@ export const executeContestCreation = async (
       }),
       insertProblemUsageLogs(database, {
         contestRunId,
-        problemIds: input.problemIds,
+        problemIds: selectedProblems.map((problem) => problem.problem_id),
         usedAt: input.startTimeMs,
       }),
       insertCommandLog(database, {

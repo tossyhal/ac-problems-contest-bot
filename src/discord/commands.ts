@@ -12,7 +12,6 @@ import {
 } from "../atcoder-problems/submissions";
 import { executeContestCreation } from "../contest-creation/service";
 import { insertCommandLog } from "../db/command-log";
-import { selectProblems } from "../problem-selection/select";
 
 type DiscordCommandOption = {
   name: string;
@@ -355,7 +354,7 @@ const createHash = async (value: string) => {
 const createContestTitle = (
   setting: SettingRecord,
   startTime: Date,
-  selectedProblems: { title: string }[],
+  problemCount: number,
 ) => {
   const startDate = startTime.toLocaleDateString("sv-SE", {
     timeZone: "Asia/Tokyo",
@@ -377,7 +376,7 @@ const createContestTitle = (
   return setting.title_template
     .replaceAll("{startDate}", startDate)
     .replaceAll("{startDateTime}", startDateTime)
-    .replaceAll("{problemCount}", String(selectedProblems.length));
+    .replaceAll("{problemCount}", String(problemCount));
 };
 
 const createContestMemo = (setting: SettingRecord, startTime: Date) => {
@@ -411,13 +410,6 @@ const getNextStartTime = (slotMinutes: number) => {
 
   return next;
 };
-
-const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
-  problems.map((problem, index) => ({
-    id: problem.problem_id,
-    order: index,
-    point: (index + 1) * 100,
-  }));
 
 const buildCustomStartSetting = (
   interaction: DiscordApplicationCommandInteraction,
@@ -667,33 +659,46 @@ const runContestCreation = async (
   }
 
   try {
-    const selectedProblems = await selectProblems({
-      database,
-      difficultyBands: input.difficultyBands,
-      settings: input.setting,
-      unsolvedOnly: input.unsolvedOnly,
-      userId: input.setting.atcoder_user_id,
-    });
     const startTime = getNextStartTime(input.setting.default_slot_minutes);
     const startEpochSecond = Math.floor(startTime.getTime() / 1000);
+    const requestedProblemCount =
+      input.difficultyBands.length > 0
+        ? input.difficultyBands.reduce(
+            (sum, band) => sum + band.problem_count,
+            0,
+          )
+        : input.setting.default_problem_count;
     const title = createContestTitle(
       input.setting,
       startTime,
-      selectedProblems,
+      requestedProblemCount,
     );
     const memo = createContestMemo(input.setting, startTime);
     const requestFingerprint = await createHash(
       JSON.stringify({
         difficultyBands: input.difficultyBands,
-        problemIds: selectedProblems.map((problem) => problem.problem_id),
+        excludeRecentlyUsedDays: input.setting.exclude_recently_used_days,
         startEpochSecond,
+        unsolvedOnly: input.unsolvedOnly,
+        userId: atcoderUserId,
         visibility: input.setting.visibility,
+        includeAbc: input.setting.include_abc,
+        includeAgc: input.setting.include_agc,
+        includeArc: input.setting.include_arc,
+        includeExperimentalDifficulty:
+          input.setting.include_experimental_difficulty,
+        allowOtherSources: input.setting.allow_other_sources,
       }),
     );
     const settingsSummary = JSON.stringify({
+      allowOtherSources: input.setting.allow_other_sources,
       difficultyBands: input.difficultyBands,
-      problemIds: selectedProblems.map((problem) => problem.problem_id),
+      excludeRecentlyUsedDays: input.setting.exclude_recently_used_days,
+      requestedProblemCount,
       startEpochSecond,
+      unsolvedOnly: input.unsolvedOnly,
+      userId: atcoderUserId,
+      visibility: input.setting.visibility,
     });
     const createdContest = options.contestCreationGuard
       ? await options.contestCreationGuard
@@ -705,16 +710,18 @@ const runContestCreation = async (
               commandName: input.commandName,
               durationSecond:
                 input.setting.default_contest_duration_minutes * 60,
+              difficultyBands: input.difficultyBands,
               isPublic: input.setting.visibility === "public",
               memo,
               penaltySecond: input.setting.default_penalty_seconds,
-              problemIds: selectedProblems.map((problem) => problem.problem_id),
-              problems: createContestProblemsPayload(selectedProblems),
               requestFingerprint,
+              settings: input.setting,
               settingsSummary,
               startEpochSecond,
               startTimeMs: startTime.getTime(),
               title,
+              unsolvedOnly: input.unsolvedOnly,
+              userId: atcoderUserId,
             }),
           })
           .then(async (response) => {
@@ -733,17 +740,19 @@ const runContestCreation = async (
           commandContext: input.commandContext,
           commandName: input.commandName,
           durationSecond: input.setting.default_contest_duration_minutes * 60,
+          difficultyBands: input.difficultyBands,
           fetchFn: options.fetchFn,
           isPublic: input.setting.visibility === "public",
           memo,
           penaltySecond: input.setting.default_penalty_seconds,
-          problemIds: selectedProblems.map((problem) => problem.problem_id),
-          problems: createContestProblemsPayload(selectedProblems),
           requestFingerprint,
+          settings: input.setting,
           settingsSummary,
           startEpochSecond,
           startTimeMs: startTime.getTime(),
           title,
+          unsolvedOnly: input.unsolvedOnly,
+          userId: atcoderUserId,
         });
 
     return createResponse(
