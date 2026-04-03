@@ -16,6 +16,7 @@ type ProblemSelectionSettings = {
   include_agc: number;
   include_arc: number;
   include_experimental_difficulty: number;
+  next_contest_sequence: number;
 };
 
 type ExecuteContestCreationInput = {
@@ -33,7 +34,6 @@ type ExecuteContestCreationInput = {
   settingsSummary: string;
   startEpochSecond: number;
   startTimeMs: number;
-  title: string;
   unsolvedOnly: boolean;
   userId: string;
 };
@@ -47,12 +47,31 @@ type ContestRunRecord = {
 
 const createRunKey = () => `${Date.now()}:${crypto.randomUUID()}`;
 
+const createContestTitle = (contestSequence: number) =>
+  `自分用バチャ #${contestSequence}`;
+
 const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
   problems.map((problem, index) => ({
     id: problem.problem_id,
     order: index,
     point: (index + 1) * 100,
   }));
+
+const incrementNextContestSequence = async (
+  database: D1Database,
+  currentSequence: number,
+) => {
+  await database
+    .prepare(
+      `UPDATE settings
+      SET
+        next_contest_sequence = ?,
+        updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))
+      WHERE id = 1`,
+    )
+    .bind(currentSequence + 1)
+    .run();
+};
 
 const insertContestRun = async (
   database: D1Database,
@@ -185,6 +204,7 @@ export const executeContestCreation = async (
       unsolvedOnly: input.unsolvedOnly,
       userId: input.userId,
     });
+    const contestSequence = input.settings.next_contest_sequence;
     const createdContest = await createContest(input.fetchFn ?? fetch, {
       durationSecond: input.durationSecond,
       isPublic: input.isPublic,
@@ -193,7 +213,7 @@ export const executeContestCreation = async (
       problems: createContestProblemsPayload(selectedProblems),
       sleepMs: input.fetchFn ? 0 : undefined,
       startEpochSecond: input.startEpochSecond,
-      title: input.title,
+      title: createContestTitle(contestSequence),
       token: input.atCoderProblemsToken,
     });
 
@@ -209,6 +229,7 @@ export const executeContestCreation = async (
         problemIds: selectedProblems.map((problem) => problem.problem_id),
         usedAt: input.startTimeMs,
       }),
+      incrementNextContestSequence(database, contestSequence),
       insertCommandLog(database, {
         commandContext: input.commandContext,
         commandName: input.commandName,

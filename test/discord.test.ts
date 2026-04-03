@@ -25,8 +25,14 @@ const createMockDatabase = (
     syncStateRecords?: Record<string, Record<string, unknown> | null>;
   } = {},
 ) => {
-  let settingRecord: null | Record<string, unknown> =
-    seed.settingRecord ?? null;
+  let settingRecord: null | Record<string, unknown> = seed.settingRecord
+    ? {
+        next_contest_sequence: 1,
+        title_template: null,
+        memo_template: null,
+        ...seed.settingRecord,
+      }
+    : null;
   let difficultyBandRecords = [...(seed.difficultyBandRecords ?? [])];
   const syncStateRecords: Record<string, Record<string, unknown> | null> = {
     ...(seed.syncStateRecords ?? {}),
@@ -96,10 +102,11 @@ const createMockDatabase = (
               include_arc: params[8],
               include_agc: params[9],
               allow_other_sources: params[10],
-              exclude_recently_used_days: params[11],
-              visibility: params[12],
-              title_template: params[13],
-              memo_template: params[14],
+              next_contest_sequence: params[11],
+              exclude_recently_used_days: params[12],
+              visibility: params[13],
+              title_template: params[14],
+              memo_template: params[15],
             };
           }
 
@@ -388,27 +395,37 @@ describe("discord interactions", () => {
         },
       },
     });
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      const url = String(input);
+    const createdContestTitles: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
 
-      if (url.includes("/atcoder-api/v3/user/submissions")) {
-        return Response.json([]);
-      }
+        if (url.includes("/atcoder-api/v3/user/submissions")) {
+          return Response.json([]);
+        }
 
-      if (url.endsWith("/internal-api/contest/create")) {
-        return Response.json({
-          contest_id: "contest-123",
-        });
-      }
+        if (url.endsWith("/internal-api/contest/create")) {
+          const payload = init?.body
+            ? (JSON.parse(String(init.body)) as { title: string })
+            : undefined;
+          if (payload?.title) {
+            createdContestTitles.push(payload.title);
+          }
+          return Response.json({
+            contest_id: "contest-123",
+          });
+        }
 
-      if (url.endsWith("/internal-api/contest/item/update")) {
-        return new Response(null, {
-          status: 200,
-        });
-      }
+        if (url.endsWith("/internal-api/contest/item/update")) {
+          return new Response(null, {
+            status: 200,
+          });
+        }
 
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
     const request = await createSignedDiscordRequest(
       {
         type: 2,
@@ -442,6 +459,7 @@ describe("discord interactions", () => {
     );
     expect(body.data.content).toContain("バチャを作成しました。");
     expect(body.data.content).toContain("開始時刻:");
+    expect(createdContestTitles).toEqual(["自分用バチャ #1"]);
   }, 10000);
 
   it("returns deferred response and patches follow-up on start", async () => {

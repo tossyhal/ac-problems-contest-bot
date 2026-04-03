@@ -15,6 +15,13 @@
       "when": 1775212222360,
       "tag": "0001_cheerful_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1775217483999,
+      "tag": "0002_lovely_sway",
+      "breakpoints": true
     }
   ]
 }

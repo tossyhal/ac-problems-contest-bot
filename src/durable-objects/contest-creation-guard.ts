@@ -28,11 +28,11 @@ type ContestCreationRequest = {
     include_agc: number;
     include_arc: number;
     include_experimental_difficulty: number;
+    next_contest_sequence: number;
   };
   settingsSummary: string;
   startEpochSecond: number;
   startTimeMs: number;
-  title: string;
   unsolvedOnly: boolean;
   userId: string;
 };

@@ -43,6 +43,7 @@ export const settings = sqliteTable("settings", {
   })
     .notNull()
     .default(false),
+  nextContestSequence: integer("next_contest_sequence").notNull().default(1),
   excludeRecentlyUsedDays: integer("exclude_recently_used_days")
     .notNull()
     .default(14),

@@ -281,7 +281,7 @@ Cloudflare は以下の役割を持つ。
 - penalty second
 - experimental difficulty を含めるか
 - 公開設定
-- タイトルテンプレート
+- 次のバチャ番号
 - メモテンプレート
 
 ### 10.1 開始時刻区切り単位

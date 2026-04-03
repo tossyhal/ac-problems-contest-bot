@@ -40,6 +40,7 @@ type SettingRecord = {
   include_arc: number;
   include_agc: number;
   allow_other_sources: number;
+  next_contest_sequence: number;
   exclude_recently_used_days: number;
   visibility: string;
   title_template: string | null;
@@ -74,6 +75,7 @@ const defaultSettingRecord: SettingRecord = {
   include_arc: 1,
   include_agc: 1,
   allow_other_sources: 0,
+  next_contest_sequence: 1,
   exclude_recently_used_days: 14,
   visibility: "private",
   title_template: null,
@@ -166,6 +168,7 @@ const getSettingRecord = async (database: D1Database) => {
         include_arc,
         include_agc,
         allow_other_sources,
+        next_contest_sequence,
         exclude_recently_used_days,
         visibility,
         title_template,
@@ -261,14 +264,13 @@ const createUpdatedSettingRecord = (
     getBooleanOption(interaction, "allow-other-sources") ??
       Boolean(currentSetting.allow_other_sources),
   ),
+  next_contest_sequence: currentSetting.next_contest_sequence,
   exclude_recently_used_days:
     getNumberOption(interaction, "exclude-recently-used-days") ??
     currentSetting.exclude_recently_used_days,
   visibility:
     getStringOption(interaction, "visibility") ?? currentSetting.visibility,
-  title_template:
-    getStringOption(interaction, "title-template") ??
-    currentSetting.title_template,
+  title_template: currentSetting.title_template,
   memo_template:
     getStringOption(interaction, "memo-template") ??
     currentSetting.memo_template,
@@ -292,11 +294,12 @@ const upsertSettingRecord = async (
         include_arc,
         include_agc,
         allow_other_sources,
-        exclude_recently_used_days,
-        visibility,
-        title_template,
-        memo_template
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        next_contest_sequence,
+      exclude_recently_used_days,
+      visibility,
+      title_template,
+      memo_template
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         atcoder_user_id = excluded.atcoder_user_id,
         default_slot_minutes = excluded.default_slot_minutes,
@@ -308,6 +311,7 @@ const upsertSettingRecord = async (
         include_arc = excluded.include_arc,
         include_agc = excluded.include_agc,
         allow_other_sources = excluded.allow_other_sources,
+        next_contest_sequence = excluded.next_contest_sequence,
         exclude_recently_used_days = excluded.exclude_recently_used_days,
         visibility = excluded.visibility,
         title_template = excluded.title_template,
@@ -326,6 +330,7 @@ const upsertSettingRecord = async (
       setting.include_arc,
       setting.include_agc,
       setting.allow_other_sources,
+      setting.next_contest_sequence,
       setting.exclude_recently_used_days,
       setting.visibility,
       setting.title_template,
@@ -349,34 +354,6 @@ const createHash = async (value: string) => {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-};
-
-const createContestTitle = (
-  setting: SettingRecord,
-  startTime: Date,
-  problemCount: number,
-) => {
-  const startDate = startTime.toLocaleDateString("sv-SE", {
-    timeZone: "Asia/Tokyo",
-  });
-  const startDateTime = startTime.toLocaleString("sv-SE", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const defaultTitle = `Practice Contest ${startDateTime}`;
-
-  if (!setting.title_template) {
-    return defaultTitle;
-  }
-
-  return setting.title_template
-    .replaceAll("{startDate}", startDate)
-    .replaceAll("{startDateTime}", startDateTime)
-    .replaceAll("{problemCount}", String(problemCount));
 };
 
 const createContestMemo = (setting: SettingRecord, startTime: Date) => {
@@ -661,18 +638,6 @@ const runContestCreation = async (
   try {
     const startTime = getNextStartTime(input.setting.default_slot_minutes);
     const startEpochSecond = Math.floor(startTime.getTime() / 1000);
-    const requestedProblemCount =
-      input.difficultyBands.length > 0
-        ? input.difficultyBands.reduce(
-            (sum, band) => sum + band.problem_count,
-            0,
-          )
-        : input.setting.default_problem_count;
-    const title = createContestTitle(
-      input.setting,
-      startTime,
-      requestedProblemCount,
-    );
     const memo = createContestMemo(input.setting, startTime);
     const requestFingerprint = await createHash(
       JSON.stringify({
@@ -694,7 +659,6 @@ const runContestCreation = async (
       allowOtherSources: input.setting.allow_other_sources,
       difficultyBands: input.difficultyBands,
       excludeRecentlyUsedDays: input.setting.exclude_recently_used_days,
-      requestedProblemCount,
       startEpochSecond,
       unsolvedOnly: input.unsolvedOnly,
       userId: atcoderUserId,
@@ -719,7 +683,6 @@ const runContestCreation = async (
               settingsSummary,
               startEpochSecond,
               startTimeMs: startTime.getTime(),
-              title,
               unsolvedOnly: input.unsolvedOnly,
               userId: atcoderUserId,
             }),
@@ -750,7 +713,6 @@ const runContestCreation = async (
           settingsSummary,
           startEpochSecond,
           startTimeMs: startTime.getTime(),
-          title,
           unsolvedOnly: input.unsolvedOnly,
           userId: atcoderUserId,
         });
@@ -810,14 +772,11 @@ const createSettingSummary = (
     `ペナルティ: ${setting.default_penalty_seconds}秒`,
     `experimental difficulty: ${booleanLabel(setting.include_experimental_difficulty)}`,
     `出典フィルタ: ABC=${booleanLabel(setting.include_abc)}, ARC=${booleanLabel(setting.include_arc)}, AGC=${booleanLabel(setting.include_agc)}, OTHER=${booleanLabel(setting.allow_other_sources)}`,
+    `次のバチャ番号: #${setting.next_contest_sequence}`,
     `直近使用問題除外: ${setting.exclude_recently_used_days}日`,
     `公開設定: ${setting.visibility}`,
     `難易度帯: ${difficultyBandSummary}`,
   ];
-
-  if (setting.title_template) {
-    lines.push(`タイトルテンプレート: ${setting.title_template}`);
-  }
 
   if (setting.memo_template) {
     lines.push(`メモテンプレート: ${setting.memo_template}`);

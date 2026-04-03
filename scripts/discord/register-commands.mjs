@@ -178,11 +178,6 @@ const commandDefinitions = [
       },
       {
         type: 3,
-        name: "title-template",
-        description: "タイトルテンプレートを更新する",
-      },
-      {
-        type: 3,
         name: "memo-template",
         description: "メモテンプレートを更新する",
       },
