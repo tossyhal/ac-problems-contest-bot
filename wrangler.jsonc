@@ -7,9 +7,15 @@
     {
       "binding": "DB",
       "database_name": "ac-problems-contest-bot",
-      "database_id": "99b00661-7ed9-4697-a75d-2455d487f217",
+      "database_id": "9fbd3f6e-d7a6-4e59-85b4-561ffee0a51e",
       "preview_database_id": "DB",
       "migrations_dir": "./drizzle"
+    },
+    {
+      "binding": "ac_problems_contest_bot",
+      "database_name": "ac-problems-contest-bot",
+      "database_id": "9fbd3f6e-d7a6-4e59-85b4-561ffee0a51e",
+      "remote": true
     }
   ],
   // Add Durable Object and secret bindings when external integration starts.
