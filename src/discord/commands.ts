@@ -34,6 +34,7 @@ import type {
 } from "./types";
 
 const maxImmediateSubmissionSyncBatches = 3;
+const submissionSyncRequestIntervalMs = 5000;
 
 const createHash = async (value: string) => {
   const encoded = new TextEncoder().encode(value);
@@ -166,7 +167,7 @@ const ensureSubmissionSyncReadyForContest = async (
   commandName: "custom-start" | "start",
   userId: string,
 ) => {
-  const currentSyncState = await getSubmissionSyncState(database);
+  const currentSyncState = await getSubmissionSyncState(database, userId);
 
   if (
     currentSyncState.status === "queued" ||
@@ -201,7 +202,7 @@ const ensureSubmissionSyncReadyForContest = async (
     }
 
     if (result.status === "failed") {
-      const failedState = await getSubmissionSyncState(database);
+      const failedState = await getSubmissionSyncState(database, userId);
 
       return {
         message: `提出同期に失敗しました。${failedState.last_error ?? "エラー内容は不明です。"}`,
@@ -212,13 +213,13 @@ const ensureSubmissionSyncReadyForContest = async (
     try {
       await startSubmissionSyncJob(options.submissionSync, userId);
     } catch (error) {
-      const currentState = await getSubmissionSyncState(database);
+      const currentState = await getSubmissionSyncState(database, userId);
       const message =
         error instanceof Error
           ? error.message
           : "提出同期ジョブの開始に失敗しました。";
 
-      await upsertSyncState(database, {
+      await upsertSyncState(database, userId, {
         ...currentState,
         last_error: message,
         status: "failed",
@@ -243,6 +244,7 @@ const ensureSubmissionSyncReadyForContest = async (
     result = await syncUserSubmissionsBatch({
       database,
       fetchFn: options.fetchFn,
+      waitBeforeFetchMs: batchCount === 0 ? 0 : submissionSyncRequestIntervalMs,
       userId,
     });
     batchCount += 1;
@@ -260,7 +262,7 @@ const ensureSubmissionSyncReadyForContest = async (
   }
 
   if (result.status === "failed") {
-    const failedState = await getSubmissionSyncState(database);
+    const failedState = await getSubmissionSyncState(database, userId);
 
     return {
       message: `提出同期に失敗しました。${failedState.last_error ?? "エラー内容は不明です。"}`,
@@ -389,9 +391,6 @@ const runContestCreation = async (
     return createResponse(
       [
         createdContest.contestUrl,
-        createdContest.reused
-          ? "既存のバチャを再利用しました。"
-          : "バチャを作成しました。",
         `開始時刻: ${startTime.toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" })} JST`,
       ].join("\n"),
     );
@@ -526,7 +525,10 @@ const handleInit = async (
       );
     }
 
-    const currentSyncState = await getSubmissionSyncState(database);
+    const currentSyncState = await getSubmissionSyncState(
+      database,
+      setting.atcoder_user_id,
+    );
 
     if (
       currentSyncState.status === "queued" ||
@@ -542,7 +544,7 @@ const handleInit = async (
     }
 
     if (options.submissionSync) {
-      await markSyncQueued(database);
+      await markSyncQueued(database, setting.atcoder_user_id);
 
       try {
         await startSubmissionSyncJob(
@@ -555,8 +557,8 @@ const handleInit = async (
             ? error.message
             : "提出同期ジョブの開始に失敗しました。";
 
-        await upsertSyncState(database, {
-          ...(await getSubmissionSyncState(database)),
+        await upsertSyncState(database, setting.atcoder_user_id, {
+          ...(await getSubmissionSyncState(database, setting.atcoder_user_id)),
           last_error: message,
           status: "failed",
         });
@@ -572,14 +574,17 @@ const handleInit = async (
       );
     }
 
-    await markSyncQueued(database);
+    await markSyncQueued(database, setting.atcoder_user_id);
     await syncUserSubmissionsBatch({
       database,
       fetchFn: options.fetchFn,
       userId: setting.atcoder_user_id,
     });
 
-    const syncState = await getSubmissionSyncState(database);
+    const syncState = await getSubmissionSyncState(
+      database,
+      setting.atcoder_user_id,
+    );
     const initStatusMessage =
       syncState.status === "running"
         ? "初期同期を1バッチ処理しました。続きがあるため、もう一度 /init action:run を実行してください。"
@@ -600,7 +605,11 @@ const handleInit = async (
     return createResponse("action は run または status を指定してください。");
   }
 
-  const syncState = await getSubmissionSyncState(database);
+  const setting = await getSettingRecord(database);
+  const syncState = await getSubmissionSyncState(
+    database,
+    setting.atcoder_user_id ?? undefined,
+  );
   const lines = [
     "現在の同期状態:",
     `status: ${syncState.status}`,

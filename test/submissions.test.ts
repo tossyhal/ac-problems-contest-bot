@@ -21,7 +21,21 @@ const createSubmissionDatabase = (seed?: {
     status: string;
   };
 }) => {
-  let syncState = seed?.syncState ?? null;
+  const syncStates: Record<
+    string,
+    {
+      full_sync_completed_at: number | null;
+      last_checkpoint: string | null;
+      last_error: string | null;
+      last_success_checkpoint: string | null;
+      last_synced_at: number | null;
+      status: string;
+    } | null
+  > = seed?.syncState
+    ? {
+        "submissions:tossyhal": seed.syncState,
+      }
+    : {};
   const solvedProblems = [...(seed?.solvedProblems ?? [])];
 
   return {
@@ -36,14 +50,14 @@ const createSubmissionDatabase = (seed?: {
       bind: (...params: unknown[]) => ({
         first: async () => {
           if (query.includes("FROM sync_states")) {
-            return syncState;
+            return syncStates[String(params[0])] ?? null;
           }
 
           return null;
         },
         run: async () => {
           if (query.includes("INSERT INTO sync_states")) {
-            syncState = {
+            syncStates[String(params[0])] = {
               full_sync_completed_at: params[2] as number | null,
               last_checkpoint: params[4] as string | null,
               last_error: params[6] as string | null,
@@ -122,7 +136,7 @@ describe("submission sync", () => {
       userId: "tossyhal",
     });
 
-    const syncState = await getSyncState(database);
+    const syncState = await getSyncState(database, "tossyhal");
 
     expect(result.status).toBe("running");
     expect(syncState.status).toBe("running");
@@ -233,5 +247,59 @@ describe("submission sync", () => {
 
     expect(result.status).toBe("running");
     expect(batchSizes).toEqual([100, 100, 100, 100, 100]);
+  });
+
+  it("waits before fetching when a retry interval is requested", async () => {
+    const database = createSubmissionDatabase({
+      syncState: {
+        full_sync_completed_at: Date.now(),
+        last_checkpoint: "100",
+        last_error: null,
+        last_success_checkpoint: "100",
+        last_synced_at: Date.now(),
+        status: "running",
+      },
+    });
+    const sleepCalls: number[] = [];
+
+    await syncUserSubmissionsBatch({
+      database,
+      fetchFn: async () => Response.json([]),
+      sleepFn: async (ms) => {
+        sleepCalls.push(ms);
+      },
+      userId: "tossyhal",
+      waitBeforeFetchMs: 5000,
+    });
+
+    expect(sleepCalls).toEqual([5000]);
+  });
+
+  it("isolates sync state by AtCoder user ID", async () => {
+    const completedAt = Date.now() - 60_000;
+    const database = createSubmissionDatabase({
+      syncState: {
+        full_sync_completed_at: completedAt,
+        last_checkpoint: "100",
+        last_error: null,
+        last_success_checkpoint: "100",
+        last_synced_at: completedAt,
+        status: "completed",
+      },
+    });
+
+    const oldUserState = await getSyncState(database, "tossyhal");
+    const newUserState = await getSyncState(database, "another_user");
+
+    expect(oldUserState.status).toBe("completed");
+    expect(oldUserState.full_sync_completed_at).toBe(completedAt);
+    expect(newUserState).toEqual({
+      full_sync_completed_at: null,
+      last_checkpoint: null,
+      last_error: null,
+      last_success_checkpoint: null,
+      last_synced_at: null,
+      status: "idle",
+    });
   });
 });

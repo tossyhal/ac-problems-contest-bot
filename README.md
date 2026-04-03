@@ -83,7 +83,7 @@ pnpm db:migrate:local
 pnpm db:generate
 ```
 
-`wrangler.jsonc` の `database_id` はプレースホルダです。実運用用の D1 を作成したら実 ID に置き換えてください。
+このリポジトリの `wrangler.jsonc` には開発用の `database_id` が入っています。自分の環境で使う前に、必ず自分の D1 ID に置き換えてください。
 
 schema を変更したときだけ remote D1 に migration を適用します。
 

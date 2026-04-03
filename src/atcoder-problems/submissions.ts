@@ -17,7 +17,9 @@ export type SyncStateRecord = {
 type SyncBatchOptions = {
   database: D1Database;
   fetchFn?: typeof fetch;
+  sleepFn?: (ms: number) => Promise<void>;
   userId: string;
+  waitBeforeFetchMs?: number;
 };
 
 type SyncBatchResult = {
@@ -28,7 +30,7 @@ type SyncBatchResult = {
 
 const atCoderProblemsApiBaseUrl = "https://kenkoooo.com/atcoder/atcoder-api/v3";
 
-const syncScope = "submissions";
+const syncScopePrefix = "submissions";
 
 const defaultSyncState: SyncStateRecord = {
   status: "idle",
@@ -39,7 +41,19 @@ const defaultSyncState: SyncStateRecord = {
   last_error: null,
 };
 
-export const getSyncState = async (database: D1Database) => {
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const createSubmissionSyncScope = (userId: string) =>
+  `${syncScopePrefix}:${userId}`;
+
+export const getSyncState = async (database: D1Database, userId?: string) => {
+  if (!userId) {
+    return defaultSyncState;
+  }
+
   const result = await database
     .prepare(
       `SELECT
@@ -52,7 +66,7 @@ export const getSyncState = async (database: D1Database) => {
       FROM sync_states
       WHERE scope = ?`,
     )
-    .bind(syncScope)
+    .bind(createSubmissionSyncScope(userId))
     .first<SyncStateRecord>();
 
   return result ?? defaultSyncState;
@@ -60,6 +74,7 @@ export const getSyncState = async (database: D1Database) => {
 
 export const upsertSyncState = async (
   database: D1Database,
+  userId: string,
   syncState: SyncStateRecord,
 ) => {
   await database
@@ -83,7 +98,7 @@ export const upsertSyncState = async (
         updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))`,
     )
     .bind(
-      syncScope,
+      createSubmissionSyncScope(userId),
       syncState.status,
       syncState.full_sync_completed_at,
       syncState.last_synced_at,
@@ -185,10 +200,10 @@ const getStartFromSecond = (syncState: SyncStateRecord) => {
   return Math.max(0, checkpoint - 1);
 };
 
-export const markSyncQueued = async (database: D1Database) => {
-  const currentSyncState = await getSyncState(database);
+export const markSyncQueued = async (database: D1Database, userId: string) => {
+  const currentSyncState = await getSyncState(database, userId);
 
-  await upsertSyncState(database, {
+  await upsertSyncState(database, userId, {
     ...currentSyncState,
     status: "queued",
     last_error: null,
@@ -198,13 +213,15 @@ export const markSyncQueued = async (database: D1Database) => {
 export const syncUserSubmissionsBatch = async ({
   database,
   fetchFn = fetch,
+  sleepFn = sleep,
   userId,
+  waitBeforeFetchMs = 0,
 }: SyncBatchOptions): Promise<SyncBatchResult> => {
-  const initialSyncState = await getSyncState(database);
+  const initialSyncState = await getSyncState(database, userId);
   const fromSecond = getStartFromSecond(initialSyncState);
   const previousCheckpoint = initialSyncState.last_success_checkpoint ?? "0";
 
-  await upsertSyncState(database, {
+  await upsertSyncState(database, userId, {
     ...initialSyncState,
     status: "running",
     last_error: null,
@@ -216,6 +233,10 @@ export const syncUserSubmissionsBatch = async ({
   });
 
   try {
+    if (waitBeforeFetchMs > 0) {
+      await sleepFn(waitBeforeFetchMs);
+    }
+
     const submissions = await fetchUserSubmissions(fetchFn, fromSecond, userId);
     const now = Date.now();
 
@@ -226,7 +247,7 @@ export const syncUserSubmissionsBatch = async ({
     });
 
     if (submissions.length === 0) {
-      await upsertSyncState(database, {
+      await upsertSyncState(database, userId, {
         status: "completed",
         full_sync_completed_at: now,
         last_synced_at: now,
@@ -256,7 +277,7 @@ export const syncUserSubmissionsBatch = async ({
     const lastCheckpoint = String(maxEpochSecond);
     const nextStatus = submissions.length < 500 ? "completed" : "running";
 
-    await upsertSyncState(database, {
+    await upsertSyncState(database, userId, {
       status: nextStatus,
       full_sync_completed_at:
         nextStatus === "completed"
@@ -284,7 +305,7 @@ export const syncUserSubmissionsBatch = async ({
     const message =
       error instanceof Error ? error.message : "同期に失敗しました。";
 
-    await upsertSyncState(database, {
+    await upsertSyncState(database, userId, {
       status: "failed",
       full_sync_completed_at: initialSyncState.full_sync_completed_at,
       last_synced_at: initialSyncState.last_synced_at,

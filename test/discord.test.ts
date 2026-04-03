@@ -226,10 +226,6 @@ const createMockDatabase = (
           return settingRecord;
         }
 
-        if (query.includes("FROM sync_states")) {
-          return syncStateRecords.submissions ?? null;
-        }
-
         if (query.includes("COUNT(*) AS count FROM problem_catalog")) {
           return { count: problemCatalogRecords.length };
         }
@@ -478,7 +474,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -550,10 +546,77 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain(
       "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
     );
-    expect(body.data.content).toContain("バチャを作成しました。");
     expect(body.data.content).toContain("開始時刻:");
     expect(createdContestTitles).toEqual(["自分用バチャ #1"]);
   }, 10000);
+
+  it("treats a changed AtCoder user ID as needing a fresh init sync", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+      ],
+      settingRecord: {
+        atcoder_user_id: "new_user",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        "submissions:old_user": {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "提出同期が未完了です。/init action:run を先に実行してください。",
+    );
+  });
 
   it("returns deferred response and patches follow-up on start", async () => {
     const database = createMockDatabase({
@@ -602,7 +665,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -810,7 +873,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -862,7 +925,6 @@ describe("discord interactions", () => {
 
     expect(response.status).toBe(200);
     expect(body.type).toBe(4);
-    expect(body.data.content).toContain("既存のバチャを再利用しました。");
     expect(body.data.content).toContain(
       "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
     );
@@ -909,7 +971,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -1066,7 +1128,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -1175,7 +1237,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -1232,7 +1294,7 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain(
       "提出情報の増分同期がまだ継続中です。少し待ってからコマンドを再実行してください。",
     );
-  });
+  }, 15000);
 
   it("writes a failed command log when durable object transport fails", async () => {
     const database = createMockDatabase({
@@ -1272,7 +1334,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -1381,7 +1443,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -1464,7 +1526,7 @@ describe("discord interactions", () => {
           FROM sync_states
           WHERE scope = ?`,
         )
-        .bind("submissions")
+        .bind("submissions:tossyhal")
         .first(),
     ).resolves.toEqual(
       expect.objectContaining({
@@ -1537,7 +1599,7 @@ describe("discord interactions", () => {
           FROM sync_states
           WHERE scope = ?`,
         )
-        .bind("submissions")
+        .bind("submissions:tossyhal")
         .first(),
     ).resolves.toEqual(
       expect.objectContaining({
@@ -1901,7 +1963,7 @@ describe("discord interactions", () => {
           last_synced_at: Date.now(),
           status: "completed",
         },
-        submissions: {
+        "submissions:tossyhal": {
           full_sync_completed_at: Date.now(),
           last_checkpoint: "123",
           last_error: null,
@@ -1980,7 +2042,6 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain(
       "https://kenkoooo.com/atcoder/#/contest/show/contest-custom-123",
     );
-    expect(body.data.content).toContain("バチャを作成しました。");
   }, 10000);
 
   it("rejects invalid AtCoder user IDs in setting updates", async () => {
