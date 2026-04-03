@@ -7,7 +7,7 @@
     {
       "binding": "DB",
       "database_name": "ac-problems-contest-bot",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "99b00661-7ed9-4697-a75d-2455d487f217",
       "preview_database_id": "DB",
       "migrations_dir": "./drizzle"
     }
