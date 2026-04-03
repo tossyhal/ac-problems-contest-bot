@@ -7,6 +7,7 @@ export type Env = {
   Bindings: {
     DB: D1Database;
     DISCORD_PUBLIC_KEY?: string;
+    PROBLEM_CATALOG_SYNC?: DurableObjectNamespace;
     SUBMISSION_SYNC?: DurableObjectNamespace;
   };
 };
@@ -48,6 +49,7 @@ app.post("/discord/interactions", async (c) => {
   const handler = createDiscordInteractionHandler(
     c.env?.DISCORD_PUBLIC_KEY,
     c.env?.DB,
+    c.env?.PROBLEM_CATALOG_SYNC,
     c.env?.SUBMISSION_SYNC,
   );
 

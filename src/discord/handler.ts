@@ -80,6 +80,7 @@ export const createDiscordInteractionHandler =
   (
     publicKeyHex: string | undefined,
     database: D1Database | undefined,
+    problemCatalogSync: DurableObjectNamespace | undefined,
     submissionSync?: DurableObjectNamespace,
   ) =>
   async (request: Request) => {
@@ -114,6 +115,7 @@ export const createDiscordInteractionHandler =
       knownCommands.has(interaction.data.name)
     ) {
       return handleDiscordCommand(database, interaction, {
+        problemCatalogSync,
         submissionSync,
       });
     }

@@ -15,6 +15,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "PROBLEM_CATALOG_SYNC",
+        "class_name": "ProblemCatalogSyncDurableObject"
+      },
+      {
         "name": "SUBMISSION_SYNC",
         "class_name": "SubmissionSyncDurableObject"
       }
@@ -24,6 +28,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["SubmissionSyncDurableObject"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ProblemCatalogSyncDurableObject"]
     }
   ],
   "observability": {

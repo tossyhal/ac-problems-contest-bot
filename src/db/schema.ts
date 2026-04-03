@@ -123,6 +123,52 @@ export const solvedProblems = sqliteTable(
   }),
 );
 
+export const problemCatalog = sqliteTable(
+  "problem_catalog",
+  {
+    problemId: text("problem_id").primaryKey(),
+    contestId: text("contest_id").notNull(),
+    problemIndex: text("problem_index"),
+    title: text("title").notNull(),
+    difficulty: integer("difficulty"),
+    isExperimental: integer("is_experimental", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(false),
+    sourceCategory: text("source_category").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    contestIdIdx: index("problem_catalog_contest_id_idx").on(table.contestId),
+    sourceCategoryIdx: index("problem_catalog_source_category_idx").on(
+      table.sourceCategory,
+    ),
+    difficultyIdx: index("problem_catalog_difficulty_idx").on(table.difficulty),
+  }),
+);
+
+export const problemUsageLogs = sqliteTable(
+  "problem_usage_logs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    problemId: text("problem_id").notNull(),
+    usedAt: integer("used_at", { mode: "timestamp_ms" }).notNull(),
+    contestRunId: integer("contest_run_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    problemIdIdx: index("problem_usage_logs_problem_id_idx").on(
+      table.problemId,
+    ),
+    usedAtIdx: index("problem_usage_logs_used_at_idx").on(table.usedAt),
+  }),
+);
+
 export const contestRuns = sqliteTable(
   "contest_runs",
   {
@@ -177,6 +223,8 @@ export const schema = {
   settingDifficultyBands,
   syncStates,
   solvedProblems,
+  problemCatalog,
+  problemUsageLogs,
   contestRuns,
   commandLogs,
 };

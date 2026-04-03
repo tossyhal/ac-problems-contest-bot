@@ -8,6 +8,13 @@
       "when": 1775185443418,
       "tag": "0000_bored_satana",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1775212222360,
+      "tag": "0001_cheerful_nighthawk",
+      "breakpoints": true
     }
   ]
 }

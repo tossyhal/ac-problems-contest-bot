@@ -1,8 +1,15 @@
 import {
+  getProblemCatalogStats,
+  getProblemCatalogSyncState,
+  isProblemCatalogStale,
+  syncProblemCatalog,
+} from "../atcoder-problems/problem-catalog";
+import {
   getSyncState as getSubmissionSyncState,
   markSyncQueued,
   syncUserSubmissionsBatch,
 } from "../atcoder-problems/submissions";
+import { selectProblems } from "../problem-selection/select";
 
 type DiscordCommandOption = {
   name: string;
@@ -48,6 +55,7 @@ type DifficultyBandRecord = {
 
 type CommandOptions = {
   fetchFn?: typeof fetch;
+  problemCatalogSync?: DurableObjectNamespace;
   submissionSync?: DurableObjectNamespace;
 };
 
@@ -330,8 +338,150 @@ const createResponse = (content: string) =>
     },
   });
 
-const handleStart = () =>
-  createResponse("デフォルト設定でのバチャ作成は未実装です。");
+const createProblemSelectionSummary = (
+  problems: {
+    contest_id: string;
+    difficulty: null | number;
+    problem_id: string;
+    title: string;
+  }[],
+  title: string,
+) =>
+  [
+    title,
+    ...problems.map(
+      (problem, index) =>
+        `${index + 1}. ${problem.problem_id} / ${problem.title} / ${problem.contest_id} / difficulty=${problem.difficulty ?? "unknown"}`,
+    ),
+    "問題選定まで完了しました。コンテスト作成は未実装です。",
+  ].join("\n");
+
+const buildCustomStartSetting = (
+  interaction: DiscordApplicationCommandInteraction,
+  currentSetting: SettingRecord,
+) => ({
+  ...currentSetting,
+  allow_other_sources: Number(
+    getBooleanOption(interaction, "allow-other-sources") ??
+      Boolean(currentSetting.allow_other_sources),
+  ),
+  default_contest_duration_minutes:
+    getNumberOption(interaction, "contest-minutes") ??
+    currentSetting.default_contest_duration_minutes,
+  default_problem_count:
+    getNumberOption(interaction, "problem-count") ??
+    currentSetting.default_problem_count,
+  default_slot_minutes:
+    getNumberOption(interaction, "slot-minutes") ??
+    currentSetting.default_slot_minutes,
+  exclude_recently_used_days:
+    getNumberOption(interaction, "exclude-recently-used-days") ??
+    currentSetting.exclude_recently_used_days,
+  include_abc: Number(
+    getBooleanOption(interaction, "include-abc") ??
+      Boolean(currentSetting.include_abc),
+  ),
+  include_agc: Number(
+    getBooleanOption(interaction, "include-agc") ??
+      Boolean(currentSetting.include_agc),
+  ),
+  include_arc: Number(
+    getBooleanOption(interaction, "include-arc") ??
+      Boolean(currentSetting.include_arc),
+  ),
+  include_experimental_difficulty: Number(
+    getBooleanOption(interaction, "include-experimental-difficulty") ??
+      Boolean(currentSetting.include_experimental_difficulty),
+  ),
+});
+
+const ensureProblemCatalogReady = async (
+  database: D1Database,
+  options: CommandOptions,
+) => {
+  const syncState = await getProblemCatalogSyncState(database);
+
+  if (syncState.status === "queued" || syncState.status === "running") {
+    return {
+      queued: true,
+    };
+  }
+
+  const stale = await isProblemCatalogStale(database);
+
+  if (!stale) {
+    return {
+      queued: false,
+    };
+  }
+
+  if (options.problemCatalogSync) {
+    const stub = options.problemCatalogSync.get(
+      options.problemCatalogSync.idFromName("global-problem-catalog"),
+    );
+    const response = await stub.fetch("https://problem-catalog-sync/refresh", {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      throw new Error("問題カタログ同期ジョブの開始に失敗しました。");
+    }
+
+    return {
+      queued: true,
+    };
+  }
+
+  await syncProblemCatalog({
+    database,
+    fetchFn: options.fetchFn,
+  });
+
+  return {
+    queued: false,
+  };
+};
+
+const handleStart = async (database: D1Database, options: CommandOptions) => {
+  const setting = await getSettingRecord(database);
+
+  if (!setting.atcoder_user_id) {
+    return createResponse(
+      "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
+    );
+  }
+
+  const submissionSyncState = await getSubmissionSyncState(database);
+
+  if (submissionSyncState.status !== "completed") {
+    return createResponse(
+      "提出同期が未完了です。/init action:run を先に実行してください。",
+    );
+  }
+
+  const catalogResult = await ensureProblemCatalogReady(database, options);
+
+  if (catalogResult.queued) {
+    return createResponse(
+      "問題カタログ同期を開始しました。少し待ってから /start を再実行してください。",
+    );
+  }
+
+  const difficultyBands = await getDifficultyBands(database);
+  const selectedProblems = await selectProblems({
+    database,
+    difficultyBands,
+    settings: setting,
+    userId: setting.atcoder_user_id,
+  });
+
+  return createResponse(
+    createProblemSelectionSummary(
+      selectedProblems,
+      "デフォルト設定から選定した問題一覧:",
+    ),
+  );
+};
 
 const createSettingSummary = (
   setting: SettingRecord,
@@ -372,28 +522,55 @@ const createSettingSummary = (
   return lines;
 };
 
-const handleCustomStart = (
+const handleCustomStart = async (
+  database: D1Database,
   interaction: DiscordApplicationCommandInteraction,
+  options: CommandOptions,
 ) => {
-  const problemCount = getOptionValue(interaction, "problem-count");
-  const contestDurationMinutes = getOptionValue(interaction, "contest-minutes");
-  const slotMinutes = getOptionValue(interaction, "slot-minutes");
-  const unsolvedOnly = getOptionValue(interaction, "unsolved-only");
-  const includeExperimentalDifficulty = getOptionValue(
-    interaction,
-    "include-experimental-difficulty",
+  const currentSetting = await getSettingRecord(database);
+
+  if (!currentSetting.atcoder_user_id) {
+    return createResponse(
+      "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
+    );
+  }
+
+  const submissionSyncState = await getSubmissionSyncState(database);
+
+  if (submissionSyncState.status !== "completed") {
+    return createResponse(
+      "提出同期が未完了です。/init action:run を先に実行してください。",
+    );
+  }
+
+  const catalogResult = await ensureProblemCatalogReady(database, options);
+
+  if (catalogResult.queued) {
+    return createResponse(
+      "問題カタログ同期を開始しました。少し待ってから /custom-start を再実行してください。",
+    );
+  }
+
+  const customSetting = buildCustomStartSetting(interaction, currentSetting);
+  const difficultyBandsInput = getStringOption(interaction, "difficulty-bands");
+  const difficultyBands =
+    difficultyBandsInput === undefined
+      ? await getDifficultyBands(database)
+      : parseDifficultyBands(difficultyBandsInput);
+  const selectedProblems = await selectProblems({
+    database,
+    difficultyBands,
+    settings: customSetting,
+    unsolvedOnly: getBooleanOption(interaction, "unsolved-only") ?? true,
+    userId: customSetting.atcoder_user_id,
+  });
+
+  return createResponse(
+    createProblemSelectionSummary(
+      selectedProblems,
+      "今回条件で選定した問題一覧:",
+    ),
   );
-
-  const lines = [
-    "条件を上書きしたバチャ作成は未実装です。",
-    `problem-count: ${problemCount ?? "未指定"}`,
-    `contest-minutes: ${contestDurationMinutes ?? "未指定"}`,
-    `slot-minutes: ${slotMinutes ?? "未指定"}`,
-    `unsolved-only: ${unsolvedOnly ?? "未指定"}`,
-    `include-experimental-difficulty: ${includeExperimentalDifficulty ?? "未指定"}`,
-  ];
-
-  return createResponse(lines.join("\n"));
 };
 
 const handleSetting = async (
@@ -436,11 +613,13 @@ const handleSetting = async (
       }
 
       const difficultyBands = await getDifficultyBands(database);
+      const problemCatalogCount = await getProblemCatalogStats(database);
 
       return createResponse(
         [
           "デフォルト設定を更新しました。",
           ...createSettingSummary(nextSetting, difficultyBands),
+          `問題カタログ件数: ${problemCatalogCount}`,
         ].join("\n"),
       );
     } catch (error) {
@@ -452,8 +631,12 @@ const handleSetting = async (
 
   const setting = await getSettingRecord(database);
   const difficultyBands = await getDifficultyBands(database);
+  const problemCatalogCount = await getProblemCatalogStats(database);
   return createResponse(
-    createSettingSummary(setting, difficultyBands).join("\n"),
+    [
+      ...createSettingSummary(setting, difficultyBands),
+      `問題カタログ件数: ${problemCatalogCount}`,
+    ].join("\n"),
   );
 };
 
@@ -553,9 +736,25 @@ export const handleDiscordCommand = async (
 ) => {
   switch (interaction.data.name) {
     case "start":
-      return handleStart();
+      if (!database) {
+        return Response.json(
+          {
+            error: "DB binding is not configured.",
+          },
+          { status: 500 },
+        );
+      }
+      return handleStart(database, options);
     case "custom-start":
-      return handleCustomStart(interaction);
+      if (!database) {
+        return Response.json(
+          {
+            error: "DB binding is not configured.",
+          },
+          { status: 500 },
+        );
+      }
+      return handleCustomStart(database, interaction, options);
     case "setting":
       if (!database) {
         return Response.json(

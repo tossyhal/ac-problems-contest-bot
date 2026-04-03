@@ -219,7 +219,8 @@ describe("discord interactions", () => {
     await expect(response.json()).resolves.toEqual({
       type: 4,
       data: {
-        content: "デフォルト設定でのバチャ作成は未実装です。",
+        content:
+          "AtCoder user ID が未設定です。/setting action:update で atcoder-user-id を設定してください。",
       },
     });
   });

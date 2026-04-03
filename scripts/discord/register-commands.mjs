@@ -44,6 +44,38 @@ const commandDefinitions = [
         name: "include-experimental-difficulty",
         description: "experimental difficulty を含めるかを上書きする",
       },
+      {
+        type: 3,
+        name: "difficulty-bands",
+        description: "難易度帯を 800-999:2,1000-1199:2 の形式で上書きする",
+      },
+      {
+        type: 5,
+        name: "include-abc",
+        description: "ABC を含めるかを上書きする",
+      },
+      {
+        type: 5,
+        name: "include-arc",
+        description: "ARC を含めるかを上書きする",
+      },
+      {
+        type: 5,
+        name: "include-agc",
+        description: "AGC を含めるかを上書きする",
+      },
+      {
+        type: 5,
+        name: "allow-other-sources",
+        description: "その他コンテストを含めるかを上書きする",
+      },
+      {
+        type: 4,
+        name: "exclude-recently-used-days",
+        description: "直近使用問題除外日数を上書きする",
+        min_value: 0,
+        max_value: 365,
+      },
     ],
   },
   {
