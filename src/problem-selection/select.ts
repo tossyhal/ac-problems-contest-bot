@@ -100,15 +100,6 @@ const includesSourceCategory = (
   }
 };
 
-const sortProblems = (
-  left: ProblemCatalogRecord,
-  right: ProblemCatalogRecord,
-) =>
-  (left.difficulty ?? Number.MAX_SAFE_INTEGER) -
-    (right.difficulty ?? Number.MAX_SAFE_INTEGER) ||
-  left.contest_id.localeCompare(right.contest_id) ||
-  left.problem_id.localeCompare(right.problem_id);
-
 const getRandomInt = (maxExclusive: number) => {
   const values = new Uint32Array(1);
   crypto.getRandomValues(values);
@@ -152,8 +143,7 @@ const filterCandidateProblems = (
       (problem) =>
         !options.unsolvedOnly ||
         !options.solvedProblemIds.has(problem.problem_id),
-    )
-    .sort(sortProblems);
+    );
 
 const takeProblemsForBand = (
   candidates: ProblemCatalogRecord[],

@@ -124,4 +124,99 @@ describe("problem selection", () => {
       "arc101_c",
     ]);
   });
+
+  it("falls back to default problem count when no difficulty bands are configured", async () => {
+    const selectedProblems = await selectProblems({
+      database: createSelectionDatabase(),
+      difficultyBands: [],
+      settings: {
+        allow_other_sources: 0,
+        default_problem_count: 2,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 1,
+        include_arc: 1,
+        include_experimental_difficulty: 0,
+      },
+      unsolvedOnly: false,
+      userId: "tossyhal",
+    });
+
+    expect(selectedProblems).toHaveLength(2);
+  });
+
+  it("throws when there are not enough candidates for the requested band", async () => {
+    await expect(
+      selectProblems({
+        database: createSelectionDatabase(),
+        difficultyBands: [
+          {
+            difficulty_max: 999,
+            difficulty_min: 800,
+            problem_count: 3,
+          },
+        ],
+        settings: {
+          allow_other_sources: 0,
+          default_problem_count: 3,
+          exclude_recently_used_days: 14,
+          include_abc: 1,
+          include_agc: 0,
+          include_arc: 0,
+          include_experimental_difficulty: 0,
+        },
+        unsolvedOnly: true,
+        userId: "tossyhal",
+      }),
+    ).rejects.toThrow("800-999 の候補が 3 問ぶん見つかりませんでした。");
+  });
+
+  it("allows solved problems when unsolvedOnly is false", async () => {
+    const selectedProblems = await selectProblems({
+      database: createSelectionDatabase(),
+      difficultyBands: [
+        {
+          difficulty_max: 899,
+          difficulty_min: 800,
+          problem_count: 1,
+        },
+      ],
+      settings: {
+        allow_other_sources: 0,
+        default_problem_count: 1,
+        exclude_recently_used_days: 0,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+      },
+      unsolvedOnly: false,
+      userId: "tossyhal",
+    });
+
+    expect(selectedProblems).toHaveLength(1);
+    expect(["abc100_a", "abc101_a"]).toContain(selectedProblems[0].problem_id);
+  });
+
+  it("throws when all source filters are disabled", async () => {
+    await expect(
+      selectProblems({
+        database: createSelectionDatabase(),
+        difficultyBands: [],
+        settings: {
+          allow_other_sources: 0,
+          default_problem_count: 1,
+          exclude_recently_used_days: 0,
+          include_abc: 0,
+          include_agc: 0,
+          include_arc: 0,
+          include_experimental_difficulty: 0,
+        },
+        unsolvedOnly: false,
+        userId: "tossyhal",
+      }),
+    ).rejects.toThrow(
+      "候補問題が不足しています。必要 1 問に対して 0 問しかありません。",
+    );
+  });
 });

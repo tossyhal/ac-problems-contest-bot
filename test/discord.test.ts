@@ -1854,6 +1854,135 @@ describe("discord interactions", () => {
     );
   });
 
+  it("creates a contest from custom-start overrides", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+        {
+          contest_id: "abc100",
+          difficulty: 920,
+          is_experimental: 0,
+          problem_id: "abc100_b",
+          problem_index: "B",
+          source_category: "ABC",
+          title: "B",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 1,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/atcoder-api/v3/user/submissions")) {
+        return Response.json([]);
+      }
+
+      if (url.endsWith("/internal-api/contest/create")) {
+        return Response.json({
+          contest_id: "contest-custom-123",
+        });
+      }
+
+      if (url.endsWith("/internal-api/contest/item/update")) {
+        return new Response(null, {
+          status: 200,
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "custom-start",
+          options: [
+            {
+              name: "contest-minutes",
+              type: 4,
+              value: 120,
+            },
+            {
+              name: "problem-count",
+              type: 4,
+              value: 2,
+            },
+            {
+              name: "unsolved-only",
+              type: 5,
+              value: false,
+            },
+          ],
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "https://kenkoooo.com/atcoder/#/contest/show/contest-custom-123",
+    );
+    expect(body.data.content).toContain("バチャを作成しました。");
+  }, 10000);
+
   it("rejects invalid AtCoder user IDs in setting updates", async () => {
     const request = await createSignedDiscordRequest({
       type: 2,
