@@ -38,6 +38,7 @@ pnpm dev
 - OpenAPI JSON: `http://localhost:8787/doc`
 - Scalar API Reference: `http://localhost:8787/reference`
 - Health check: `http://localhost:8787/health`
+- Discord endpoint: `POST http://localhost:8787/discord/interactions`
 
 ## D1 / Drizzle
 
@@ -54,6 +55,10 @@ pnpm db:generate
 ```
 
 `wrangler.jsonc` の `database_id` はプレースホルダです。実運用用の D1 を作成したら実 ID に置き換えてください。
+
+## Discord
+
+Discord interaction の署名検証には `DISCORD_PUBLIC_KEY` secret が必要です。
 
 ## チェック
 

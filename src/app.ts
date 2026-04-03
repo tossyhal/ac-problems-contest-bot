@@ -1,9 +1,12 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { apiReference } from "@scalar/hono-api-reference";
 
+import { createDiscordInteractionHandler } from "./discord/handler";
+
 export type Env = {
   Bindings: {
     DB: D1Database;
+    DISCORD_PUBLIC_KEY?: string;
   };
 };
 
@@ -37,6 +40,12 @@ const healthRoute = createRoute({
 app.get("/", (c) => c.text("ac-problems-contest-bot"));
 
 app.openapi(healthRoute, (c) => c.json({ ok: true }, 200));
+
+app.post("/discord/interactions", async (c) => {
+  const handler = createDiscordInteractionHandler(c.env?.DISCORD_PUBLIC_KEY);
+
+  return handler(c.req.raw);
+});
 
 app.doc("/doc", {
   openapi: "3.1.0",
