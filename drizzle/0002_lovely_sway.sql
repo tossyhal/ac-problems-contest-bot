@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `next_contest_sequence` integer DEFAULT 1 NOT NULL;

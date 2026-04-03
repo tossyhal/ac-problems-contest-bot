@@ -1,8 +1,18 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { apiReference } from "@scalar/hono-api-reference";
 
+import { createDiscordInteractionHandler } from "./discord/handler";
+
 export type Env = {
-  Bindings: Record<string, never>;
+  Bindings: {
+    ATCODER_PROBLEMS_TOKEN?: string;
+    ATCODER_PROBLEMS_REQUEST_INTERVAL_MS?: string;
+    CONTEST_CREATION_GUARD?: DurableObjectNamespace;
+    DB: D1Database;
+    DISCORD_PUBLIC_KEY?: string;
+    PROBLEM_CATALOG_SYNC?: DurableObjectNamespace;
+    SUBMISSION_SYNC?: DurableObjectNamespace;
+  };
 };
 
 export const app = new OpenAPIHono<Env>();
@@ -35,6 +45,38 @@ const healthRoute = createRoute({
 app.get("/", (c) => c.text("ac-problems-contest-bot"));
 
 app.openapi(healthRoute, (c) => c.json({ ok: true }, 200));
+
+// Discord interaction は署名検証付きの webhook 受け口として扱うため、
+// 現時点では公開 OpenAPI には載せない。
+app.post("/discord/interactions", async (c) => {
+  const executionCtx = (() => {
+    try {
+      return c.executionCtx;
+    } catch {
+      return undefined;
+    }
+  })();
+  const configuredRequestIntervalMs = c.env
+    ?.ATCODER_PROBLEMS_REQUEST_INTERVAL_MS
+    ? Number(c.env.ATCODER_PROBLEMS_REQUEST_INTERVAL_MS)
+    : undefined;
+  const handler = createDiscordInteractionHandler({
+    atCoderProblemsToken: c.env?.ATCODER_PROBLEMS_TOKEN,
+    atCoderProblemsRequestIntervalMs: Number.isFinite(
+      configuredRequestIntervalMs,
+    )
+      ? configuredRequestIntervalMs
+      : undefined,
+    contestCreationGuard: c.env?.CONTEST_CREATION_GUARD,
+    database: c.env?.DB,
+    executionCtx,
+    problemCatalogSync: c.env?.PROBLEM_CATALOG_SYNC,
+    publicKeyHex: c.env?.DISCORD_PUBLIC_KEY,
+    submissionSync: c.env?.SUBMISSION_SYNC,
+  });
+
+  return handler(c.req.raw);
+});
 
 app.doc("/doc", {
   openapi: "3.1.0",

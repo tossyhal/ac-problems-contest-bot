@@ -1,0 +1,10 @@
+# Required for Discord interaction signature verification at runtime.
+DISCORD_PUBLIC_KEY=""
+
+# Required when registering Discord application commands.
+DISCORD_APPLICATION_ID=""
+DISCORD_BOT_TOKEN=""
+DISCORD_GUILD_ID=""
+
+# Required once AtCoder Problems API integration is implemented.
+ATCODER_PROBLEMS_TOKEN=""

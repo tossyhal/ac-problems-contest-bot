@@ -3,7 +3,45 @@
   "name": "ac-problems-contest-bot",
   "main": "./src/index.ts",
   "compatibility_date": "2026-04-03",
-  // Add D1, Durable Object, and secret bindings when external integration starts.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ac-problems-contest-bot",
+      "database_id": "9fbd3f6e-d7a6-4e59-85b4-561ffee0a51e",
+      "preview_database_id": "DB",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CONTEST_CREATION_GUARD",
+        "class_name": "ContestCreationGuardDurableObject"
+      },
+      {
+        "name": "PROBLEM_CATALOG_SYNC",
+        "class_name": "ProblemCatalogSyncDurableObject"
+      },
+      {
+        "name": "SUBMISSION_SYNC",
+        "class_name": "SubmissionSyncDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SubmissionSyncDurableObject"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ProblemCatalogSyncDurableObject"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["ContestCreationGuardDurableObject"]
+    }
+  ],
   "observability": {
     "enabled": true
   }
