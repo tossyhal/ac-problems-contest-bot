@@ -6,6 +6,7 @@ import { createDiscordInteractionHandler } from "./discord/handler";
 export type Env = {
   Bindings: {
     ATCODER_PROBLEMS_TOKEN?: string;
+    ATCODER_PROBLEMS_REQUEST_INTERVAL_MS?: string;
     CONTEST_CREATION_GUARD?: DurableObjectNamespace;
     DB: D1Database;
     DISCORD_PUBLIC_KEY?: string;
@@ -55,8 +56,17 @@ app.post("/discord/interactions", async (c) => {
       return undefined;
     }
   })();
+  const configuredRequestIntervalMs = c.env
+    ?.ATCODER_PROBLEMS_REQUEST_INTERVAL_MS
+    ? Number(c.env.ATCODER_PROBLEMS_REQUEST_INTERVAL_MS)
+    : undefined;
   const handler = createDiscordInteractionHandler({
     atCoderProblemsToken: c.env?.ATCODER_PROBLEMS_TOKEN,
+    atCoderProblemsRequestIntervalMs: Number.isFinite(
+      configuredRequestIntervalMs,
+    )
+      ? configuredRequestIntervalMs
+      : undefined,
     contestCreationGuard: c.env?.CONTEST_CREATION_GUARD,
     database: c.env?.DB,
     executionCtx,

@@ -24,6 +24,7 @@ type ProblemSelectionSettings = {
 
 export type ExecuteContestCreationInput = {
   atCoderProblemsToken: string;
+  atCoderProblemsRequestIntervalMs?: number;
   commandContext?: string;
   commandName: "custom-start" | "start";
   durationSecond: number;
@@ -286,7 +287,7 @@ export const executeContestCreation = async (
       memo: input.memo,
       penaltySecond: input.penaltySecond,
       problems: createContestProblemsPayload(selectedProblems),
-      sleepMs: input.fetchFn ? 0 : undefined,
+      sleepMs: input.atCoderProblemsRequestIntervalMs,
       startEpochSecond: input.startEpochSecond,
       title: createContestTitle(contestSequence),
       token: input.atCoderProblemsToken,

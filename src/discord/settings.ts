@@ -377,7 +377,9 @@ export const buildCustomStartSetting = (
     getBooleanOption(interaction, "include-experimental-difficulty") ??
       Boolean(currentSetting.include_experimental_difficulty),
   ),
-  visibility: validateVisibility(currentSetting.visibility),
+  visibility: validateVisibility(
+    getStringOption(interaction, "visibility") ?? currentSetting.visibility,
+  ),
 });
 
 export const createSettingSummary = (

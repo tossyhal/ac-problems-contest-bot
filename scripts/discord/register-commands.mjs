@@ -76,6 +76,15 @@ const commandDefinitions = [
         min_value: 0,
         max_value: 365,
       },
+      {
+        type: 3,
+        name: "visibility",
+        description: "公開設定を上書きする",
+        choices: [
+          { name: "private", value: "private" },
+          { name: "public", value: "public" },
+        ],
+      },
     ],
   },
   {

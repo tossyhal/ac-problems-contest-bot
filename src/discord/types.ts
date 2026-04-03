@@ -57,6 +57,7 @@ export type DifficultyBandRecord = {
 
 export type CommandOptions = {
   atCoderProblemsToken?: string;
+  atCoderProblemsRequestIntervalMs?: number;
   contestCreationGuard?: DurableObjectNamespace;
   fetchFn?: typeof fetch;
   problemCatalogSync?: DurableObjectNamespace;

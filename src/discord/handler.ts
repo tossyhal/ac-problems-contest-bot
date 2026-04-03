@@ -12,6 +12,7 @@ const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
 
 type DiscordInteractionHandlerDependencies = {
   atCoderProblemsToken?: string;
+  atCoderProblemsRequestIntervalMs?: number;
   contestCreationGuard?: DurableObjectNamespace;
   database?: D1Database;
   executionCtx?: ExecutionContext;
@@ -148,6 +149,7 @@ const extractResponseErrorMessage = async (response: Response) => {
 export const createDiscordInteractionHandler =
   ({
     atCoderProblemsToken,
+    atCoderProblemsRequestIntervalMs,
     contestCreationGuard,
     database,
     executionCtx,
@@ -208,6 +210,7 @@ export const createDiscordInteractionHandler =
         executionCtx.waitUntil(
           handleDiscordCommand(database, interaction, {
             atCoderProblemsToken,
+            atCoderProblemsRequestIntervalMs,
             contestCreationGuard,
             problemCatalogSync,
             submissionSync,
@@ -263,6 +266,7 @@ export const createDiscordInteractionHandler =
 
       return handleDiscordCommand(database, interaction, {
         atCoderProblemsToken,
+        atCoderProblemsRequestIntervalMs,
         contestCreationGuard,
         problemCatalogSync,
         submissionSync,

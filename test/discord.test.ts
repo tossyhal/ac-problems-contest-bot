@@ -277,6 +277,7 @@ const createSignedDiscordRequest = async (
   return {
     body,
     env: {
+      ATCODER_PROBLEMS_REQUEST_INTERVAL_MS: "0",
       DB: database,
       DISCORD_PUBLIC_KEY: toHex(publicKey),
     },
@@ -723,6 +724,7 @@ describe("discord interactions", () => {
     );
     const handler = createDiscordInteractionHandler({
       atCoderProblemsToken: "test-token",
+      atCoderProblemsRequestIntervalMs: 0,
       database,
       executionCtx: {
         waitUntil: (promise: Promise<unknown>) => {
@@ -779,6 +781,7 @@ describe("discord interactions", () => {
     );
     const handler = createDiscordInteractionHandler({
       atCoderProblemsToken: "test-token",
+      atCoderProblemsRequestIntervalMs: 0,
       executionCtx: {
         waitUntil: (promise: Promise<unknown>) => {
           waitUntilPromise = promise;
@@ -1774,6 +1777,81 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain("last checkpoint: 1712131201");
   });
 
+  it("returns a failed status message when local init sync fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response("upstream failed", { status: 500 }),
+    );
+    const database = createMockDatabase();
+    const updateRequest = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "setting",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "update",
+            },
+            {
+              name: "atcoder-user-id",
+              type: 3,
+              value: "tossyhal",
+            },
+          ],
+        },
+      },
+      database,
+    );
+    await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: updateRequest.headers,
+        body: updateRequest.body,
+      },
+      updateRequest.env,
+    );
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "init",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "run",
+            },
+          ],
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("初期同期に失敗しました。");
+    expect(body.data.content).toContain(
+      "AtCoder Problems submissions API error: 500",
+    );
+    expect(body.data.content).toContain("status: failed");
+  });
+
   it("queues init when submission sync durable object is available", async () => {
     const database = createMockDatabase();
     let startRequests = 0;
@@ -1917,6 +1995,7 @@ describe("discord interactions", () => {
   });
 
   it("creates a contest from custom-start overrides", async () => {
+    const createPayloads: Array<{ is_public: boolean }> = [];
     const database = createMockDatabase({
       problemCatalogRecords: [
         {
@@ -1973,27 +2052,35 @@ describe("discord interactions", () => {
         },
       },
     });
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-      const url = String(input);
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
 
-      if (url.includes("/atcoder-api/v3/user/submissions")) {
-        return Response.json([]);
-      }
+        if (url.includes("/atcoder-api/v3/user/submissions")) {
+          return Response.json([]);
+        }
 
-      if (url.endsWith("/internal-api/contest/create")) {
-        return Response.json({
-          contest_id: "contest-custom-123",
-        });
-      }
+        if (url.endsWith("/internal-api/contest/create")) {
+          if (init?.body) {
+            createPayloads.push(
+              JSON.parse(String(init.body)) as { is_public: boolean },
+            );
+          }
+          return Response.json({
+            contest_id: "contest-custom-123",
+          });
+        }
 
-      if (url.endsWith("/internal-api/contest/item/update")) {
-        return new Response(null, {
-          status: 200,
-        });
-      }
+        if (url.endsWith("/internal-api/contest/item/update")) {
+          return new Response(null, {
+            status: 200,
+          });
+        }
 
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
     const request = await createSignedDiscordRequest(
       {
         type: 2,
@@ -2014,6 +2101,11 @@ describe("discord interactions", () => {
               name: "unsolved-only",
               type: 5,
               value: false,
+            },
+            {
+              name: "visibility",
+              type: 3,
+              value: "public",
             },
           ],
         },
@@ -2042,7 +2134,12 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain(
       "https://kenkoooo.com/atcoder/#/contest/show/contest-custom-123",
     );
-  }, 10000);
+    expect(createPayloads).toContainEqual(
+      expect.objectContaining({
+        is_public: true,
+      }),
+    );
+  });
 
   it("rejects invalid AtCoder user IDs in setting updates", async () => {
     const request = await createSignedDiscordRequest({

@@ -241,10 +241,16 @@ const ensureSubmissionSyncReadyForContest = async (
   let batchCount = 0;
 
   do {
+    const waitBeforeFetchMs =
+      batchCount === 0
+        ? 0
+        : (options.atCoderProblemsRequestIntervalMs ??
+          submissionSyncRequestIntervalMs);
+
     result = await syncUserSubmissionsBatch({
       database,
       fetchFn: options.fetchFn,
-      waitBeforeFetchMs: batchCount === 0 ? 0 : submissionSyncRequestIntervalMs,
+      waitBeforeFetchMs,
       userId,
     });
     batchCount += 1;
@@ -343,6 +349,8 @@ const runContestCreation = async (
             body: JSON.stringify({
               commandContext: input.commandContext,
               commandName: input.commandName,
+              atCoderProblemsRequestIntervalMs:
+                options.atCoderProblemsRequestIntervalMs,
               durationSecond:
                 input.setting.default_contest_duration_minutes * 60,
               difficultyBands: input.difficultyBands,
@@ -371,6 +379,8 @@ const runContestCreation = async (
           })
       : await executeContestCreation(database, {
           atCoderProblemsToken: options.atCoderProblemsToken,
+          atCoderProblemsRequestIntervalMs:
+            options.atCoderProblemsRequestIntervalMs,
           commandContext: input.commandContext,
           commandName: input.commandName,
           durationSecond: input.setting.default_contest_duration_minutes * 60,
@@ -578,6 +588,7 @@ const handleInit = async (
     await syncUserSubmissionsBatch({
       database,
       fetchFn: options.fetchFn,
+      waitBeforeFetchMs: 0,
       userId: setting.atcoder_user_id,
     });
 
@@ -588,7 +599,9 @@ const handleInit = async (
     const initStatusMessage =
       syncState.status === "running"
         ? "初期同期を1バッチ処理しました。続きがあるため、もう一度 /init action:run を実行してください。"
-        : "初期同期を完了しました。";
+        : syncState.status === "failed"
+          ? `初期同期に失敗しました。${syncState.last_error ?? "エラー内容は不明です。"}`
+          : "初期同期を完了しました。";
 
     return createResponse(
       [

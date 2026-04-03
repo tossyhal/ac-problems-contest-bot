@@ -1,6 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 
-import { syncUserSubmissionsBatch } from "../atcoder-problems/submissions";
+import {
+  getSyncState,
+  syncUserSubmissionsBatch,
+  upsertSyncState,
+} from "../atcoder-problems/submissions";
 
 type SubmissionSyncJob = {
   retryCount: number;
@@ -91,6 +95,13 @@ export class SubmissionSyncDurableObject extends DurableObject<SubmissionSyncEnv
       }
 
       if (retryCount >= maxAlarmRetries) {
+        const currentState = await getSyncState(this.env.DB, job.userId);
+
+        await upsertSyncState(this.env.DB, job.userId, {
+          ...currentState,
+          last_error: "提出同期ジョブが再試行上限に達したため中断しました。",
+          status: "failed",
+        });
         await this.ctx.storage.delete(jobStorageKey);
         return;
       }

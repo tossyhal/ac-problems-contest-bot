@@ -199,6 +199,7 @@ describe("contest creation", () => {
 
     const result = await executeContestCreation(database, {
       atCoderProblemsToken: "token",
+      atCoderProblemsRequestIntervalMs: 0,
       commandName: "start",
       difficultyBands: [],
       durationSecond: 600,
@@ -264,6 +265,7 @@ describe("contest creation", () => {
     await expect(
       executeContestCreation(database, {
         atCoderProblemsToken: "token",
+        atCoderProblemsRequestIntervalMs: 0,
         commandName: "start",
         difficultyBands: [],
         durationSecond: 600,
@@ -309,6 +311,7 @@ describe("contest creation", () => {
     await expect(
       executeContestCreation(database, {
         atCoderProblemsToken: "token",
+        atCoderProblemsRequestIntervalMs: 0,
         commandName: "start",
         difficultyBands: [],
         durationSecond: 600,
