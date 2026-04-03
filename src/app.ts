@@ -2,7 +2,9 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { apiReference } from "@scalar/hono-api-reference";
 
 export type Env = {
-  Bindings: Record<string, never>;
+  Bindings: {
+    DB: D1Database;
+  };
 };
 
 export const app = new OpenAPIHono<Env>();

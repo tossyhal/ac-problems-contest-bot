@@ -3,7 +3,16 @@
   "name": "ac-problems-contest-bot",
   "main": "./src/index.ts",
   "compatibility_date": "2026-04-03",
-  // Add D1, Durable Object, and secret bindings when external integration starts.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ac-problems-contest-bot",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "DB",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  // Add Durable Object and secret bindings when external integration starts.
   "observability": {
     "enabled": true
   }

@@ -39,6 +39,22 @@ pnpm dev
 - Scalar API Reference: `http://localhost:8787/reference`
 - Health check: `http://localhost:8787/health`
 
+## D1 / Drizzle
+
+ローカル D1 へ migration を適用します。
+
+```bash
+pnpm db:migrate:local
+```
+
+スキーマ変更から migration ファイルを生成する場合は以下を使います。
+
+```bash
+pnpm db:generate
+```
+
+`wrangler.jsonc` の `database_id` はプレースホルダです。実運用用の D1 を作成したら実 ID に置き換えてください。
+
 ## チェック
 
 ```bash
