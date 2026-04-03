@@ -360,6 +360,27 @@ describe("discord interactions", () => {
     });
   });
 
+  it("rejects malformed signed Discord requests with 401", async () => {
+    const request = await createSignedDiscordRequest({ type: 1 });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: {
+          ...request.headers,
+          "x-signature-ed25519": "abc",
+        },
+        body: request.body,
+      },
+      request.env,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid Discord signature.",
+    });
+  });
+
   it("dispatches known slash commands", async () => {
     const request = await createSignedDiscordRequest({
       type: 2,

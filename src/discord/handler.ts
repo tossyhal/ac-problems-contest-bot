@@ -61,20 +61,24 @@ export const verifyDiscordRequest = async (
     return null;
   }
 
-  const body = await request.text();
-  const publicKey = await importDiscordPublicKey(publicKeyHex);
-  const isValid = await crypto.subtle.verify(
-    "Ed25519",
-    publicKey,
-    hexToUint8Array(signature),
-    encoder.encode(`${timestamp}${body}`),
-  );
+  try {
+    const body = await request.text();
+    const publicKey = await importDiscordPublicKey(publicKeyHex);
+    const isValid = await crypto.subtle.verify(
+      "Ed25519",
+      publicKey,
+      hexToUint8Array(signature),
+      encoder.encode(`${timestamp}${body}`),
+    );
 
-  if (!isValid) {
+    if (!isValid) {
+      return null;
+    }
+
+    return body;
+  } catch {
     return null;
   }
-
-  return body;
 };
 
 const isPingInteraction = (

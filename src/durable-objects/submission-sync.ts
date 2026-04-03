@@ -32,7 +32,7 @@ export class SubmissionSyncDurableObject extends DurableObject<SubmissionSyncEnv
       await this.ctx.storage.put(jobStorageKey, {
         userId: body.userId,
       });
-      await this.ctx.storage.setAlarm(Date.now());
+      await this.ctx.storage.setAlarm(Date.now() + alarmDelayMs);
 
       return Response.json({
         status: "queued",

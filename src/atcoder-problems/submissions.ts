@@ -250,7 +250,10 @@ export const syncUserSubmissionsBatch = async ({
 
     await upsertSyncState(database, {
       status: nextStatus,
-      full_sync_completed_at: nextStatus === "completed" ? now : null,
+      full_sync_completed_at:
+        nextStatus === "completed"
+          ? now
+          : initialSyncState.full_sync_completed_at,
       last_synced_at: now,
       last_checkpoint: lastCheckpoint,
       last_success_checkpoint: lastCheckpoint,
