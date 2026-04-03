@@ -96,7 +96,7 @@ describe("discord interactions", () => {
     await expect(response.json()).resolves.toEqual({
       type: 4,
       data: {
-        content: "/start is not implemented yet.",
+        content: "デフォルト設定でのバチャ作成は未実装です。",
       },
     });
   });

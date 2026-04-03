@@ -1,6 +1,13 @@
 const encoder = new TextEncoder();
 
-const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
+const commandResponseContent = {
+  start: "デフォルト設定でのバチャ作成は未実装です。",
+  "custom-start": "条件を上書きしたバチャ作成は未実装です。",
+  setting: "デフォルト設定の表示と更新は未実装です。",
+  init: "初期同期の実行と状態確認は未実装です。",
+} as const;
+
+const knownCommands = new Set(Object.keys(commandResponseContent));
 
 type DiscordPingInteraction = {
   type: 1;
@@ -109,7 +116,10 @@ export const createDiscordInteractionHandler =
       return Response.json({
         type: 4,
         data: {
-          content: `/${interaction.data.name} is not implemented yet.`,
+          content:
+            commandResponseContent[
+              interaction.data.name as keyof typeof commandResponseContent
+            ],
         },
       });
     }
