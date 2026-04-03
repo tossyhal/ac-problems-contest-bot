@@ -614,19 +614,16 @@ describe("discord interactions", () => {
       },
       database,
     );
-    const handler = createDiscordInteractionHandler(
-      "test-token",
-      undefined,
-      request.env.DISCORD_PUBLIC_KEY,
+    const handler = createDiscordInteractionHandler({
+      atCoderProblemsToken: "test-token",
       database,
-      undefined,
-      undefined,
-      {
+      executionCtx: {
         waitUntil: (promise: Promise<unknown>) => {
           waitUntilPromise = promise;
         },
       } as ExecutionContext,
-    );
+      publicKeyHex: request.env.DISCORD_PUBLIC_KEY,
+    });
     const response = await handler(
       new Request("http://localhost/discord/interactions", {
         body: request.body,
@@ -673,19 +670,15 @@ describe("discord interactions", () => {
         throw new Error(`Unexpected fetch: ${url}`);
       },
     );
-    const handler = createDiscordInteractionHandler(
-      "test-token",
-      undefined,
-      request.env.DISCORD_PUBLIC_KEY,
-      undefined,
-      undefined,
-      undefined,
-      {
+    const handler = createDiscordInteractionHandler({
+      atCoderProblemsToken: "test-token",
+      executionCtx: {
         waitUntil: (promise: Promise<unknown>) => {
           waitUntilPromise = promise;
         },
       } as ExecutionContext,
-    );
+      publicKeyHex: request.env.DISCORD_PUBLIC_KEY,
+    });
     const response = await handler(
       new Request("http://localhost/discord/interactions", {
         body: request.body,

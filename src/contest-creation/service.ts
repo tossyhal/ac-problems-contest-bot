@@ -19,7 +19,7 @@ type ProblemSelectionSettings = {
   next_contest_sequence: number;
 };
 
-type ExecuteContestCreationInput = {
+export type ExecuteContestCreationInput = {
   atCoderProblemsToken: string;
   commandContext?: string;
   commandName: "custom-start" | "start";

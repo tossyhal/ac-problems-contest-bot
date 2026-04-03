@@ -1,30 +1,24 @@
 import { handleDiscordCommand } from "./commands";
+import type {
+  DiscordApplicationCommandInteraction,
+  DiscordInteraction,
+  DiscordPingInteraction,
+} from "./types";
 
 const encoder = new TextEncoder();
 const discordRequestToleranceMs = 5 * 60 * 1000;
 
 const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
 
-type DiscordPingInteraction = {
-  application_id?: string;
-  id?: string;
-  token?: string;
-  type: 1;
+type DiscordInteractionHandlerDependencies = {
+  atCoderProblemsToken?: string;
+  contestCreationGuard?: DurableObjectNamespace;
+  database?: D1Database;
+  executionCtx?: ExecutionContext;
+  problemCatalogSync?: DurableObjectNamespace;
+  publicKeyHex?: string;
+  submissionSync?: DurableObjectNamespace;
 };
-
-type DiscordApplicationCommandInteraction = {
-  application_id: string;
-  type: 2;
-  id: string;
-  token: string;
-  data: {
-    name: string;
-  };
-};
-
-type DiscordInteraction =
-  | DiscordPingInteraction
-  | DiscordApplicationCommandInteraction;
 
 const hexToUint8Array = (value: string) => {
   if (value.length % 2 !== 0) {
@@ -141,15 +135,15 @@ const extractResponseErrorMessage = async (response: Response) => {
 };
 
 export const createDiscordInteractionHandler =
-  (
-    atCoderProblemsToken: string | undefined,
-    contestCreationGuard: DurableObjectNamespace | undefined,
-    publicKeyHex: string | undefined,
-    database: D1Database | undefined,
-    problemCatalogSync: DurableObjectNamespace | undefined,
-    submissionSync?: DurableObjectNamespace,
-    executionCtx?: ExecutionContext,
-  ) =>
+  ({
+    atCoderProblemsToken,
+    contestCreationGuard,
+    database,
+    executionCtx,
+    problemCatalogSync,
+    publicKeyHex,
+    submissionSync,
+  }: DiscordInteractionHandlerDependencies) =>
   async (request: Request) => {
     if (!publicKeyHex) {
       return Response.json(

@@ -55,15 +55,15 @@ app.post("/discord/interactions", async (c) => {
       return undefined;
     }
   })();
-  const handler = createDiscordInteractionHandler(
-    c.env?.ATCODER_PROBLEMS_TOKEN,
-    c.env?.CONTEST_CREATION_GUARD,
-    c.env?.DISCORD_PUBLIC_KEY,
-    c.env?.DB,
-    c.env?.PROBLEM_CATALOG_SYNC,
-    c.env?.SUBMISSION_SYNC,
+  const handler = createDiscordInteractionHandler({
+    atCoderProblemsToken: c.env?.ATCODER_PROBLEMS_TOKEN,
+    contestCreationGuard: c.env?.CONTEST_CREATION_GUARD,
+    database: c.env?.DB,
     executionCtx,
-  );
+    problemCatalogSync: c.env?.PROBLEM_CATALOG_SYNC,
+    publicKeyHex: c.env?.DISCORD_PUBLIC_KEY,
+    submissionSync: c.env?.SUBMISSION_SYNC,
+  });
 
   return handler(c.req.raw);
 });
