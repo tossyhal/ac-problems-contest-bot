@@ -6,6 +6,12 @@ import {
 } from "../src/atcoder-problems/submissions";
 
 const createSubmissionDatabase = (seed?: {
+  solvedProblems?: Array<{
+    atcoder_user_id: string;
+    problem_id: string;
+    solved_at: number | null;
+    synced_at: number;
+  }>;
   syncState?: {
     full_sync_completed_at: number | null;
     last_checkpoint: string | null;
@@ -16,6 +22,7 @@ const createSubmissionDatabase = (seed?: {
   };
 }) => {
   let syncState = seed?.syncState ?? null;
+  const solvedProblems = [...(seed?.solvedProblems ?? [])];
 
   return {
     batch: async (statements: { run: () => Promise<unknown> }[]) => {
@@ -46,7 +53,41 @@ const createSubmissionDatabase = (seed?: {
             };
           }
 
+          if (query.includes("INSERT INTO solved_problems")) {
+            const atcoderUserId = params[0] as string;
+            const problemId = params[1] as string;
+            const solvedAt = params[2] as number;
+            const syncedAt = params[3] as number;
+            const existing = solvedProblems.find(
+              (record) =>
+                record.atcoder_user_id === atcoderUserId &&
+                record.problem_id === problemId,
+            );
+
+            if (existing) {
+              existing.solved_at =
+                existing.solved_at === null
+                  ? solvedAt
+                  : Math.min(existing.solved_at, solvedAt);
+              existing.synced_at = syncedAt;
+            } else {
+              solvedProblems.push({
+                atcoder_user_id: atcoderUserId,
+                problem_id: problemId,
+                solved_at: solvedAt,
+                synced_at: syncedAt,
+              });
+            }
+          }
+
           return { success: true };
+        },
+        all: async () => {
+          if (query.includes("FROM solved_problems")) {
+            return { results: solvedProblems };
+          }
+
+          return { results: [] };
         },
       }),
     }),
@@ -86,5 +127,61 @@ describe("submission sync", () => {
     expect(result.status).toBe("running");
     expect(syncState.status).toBe("running");
     expect(syncState.full_sync_completed_at).toBe(completedAt);
+  });
+
+  it("preserves the earliest AC timestamp when the same problem is solved again", async () => {
+    const firstSolvedAt = 1_700_000_000_000;
+    const database = createSubmissionDatabase({
+      solvedProblems: [
+        {
+          atcoder_user_id: "tossyhal",
+          problem_id: "abc100_a",
+          solved_at: firstSolvedAt,
+          synced_at: firstSolvedAt,
+        },
+      ],
+      syncState: {
+        full_sync_completed_at: firstSolvedAt,
+        last_checkpoint: "100",
+        last_error: null,
+        last_success_checkpoint: "100",
+        last_synced_at: firstSolvedAt,
+        status: "completed",
+      },
+    });
+
+    await syncUserSubmissionsBatch({
+      database,
+      fetchFn: async () =>
+        Response.json([
+          {
+            epoch_second: Math.floor((firstSolvedAt + 60_000) / 1000),
+            id: 1,
+            problem_id: "abc100_a",
+            result: "AC",
+          },
+        ]),
+      userId: "tossyhal",
+    });
+
+    const solved = await database
+      .prepare(
+        `SELECT problem_id
+        FROM solved_problems
+        WHERE atcoder_user_id = ?`,
+      )
+      .bind("tossyhal")
+      .all<{
+        atcoder_user_id: string;
+        problem_id: string;
+        solved_at: number;
+      }>();
+
+    expect(solved.results).toContainEqual(
+      expect.objectContaining({
+        problem_id: "abc100_a",
+        solved_at: firstSolvedAt,
+      }),
+    );
   });
 });

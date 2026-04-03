@@ -3,6 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 import { syncUserSubmissionsBatch } from "../atcoder-problems/submissions";
 
 type SubmissionSyncJob = {
+  retryCount: number;
   userId: string;
 };
 
@@ -12,6 +13,7 @@ type SubmissionSyncEnv = {
 
 const alarmDelayMs = 5000;
 const jobStorageKey = "job";
+const maxAlarmRetries = 3;
 
 export class SubmissionSyncDurableObject extends DurableObject<SubmissionSyncEnv> {
   override async fetch(request: Request) {
@@ -30,6 +32,7 @@ export class SubmissionSyncDurableObject extends DurableObject<SubmissionSyncEnv
       }
 
       await this.ctx.storage.put(jobStorageKey, {
+        retryCount: 0,
         userId: body.userId,
       });
       await this.ctx.storage.setAlarm(Date.now() + alarmDelayMs);
@@ -65,16 +68,38 @@ export class SubmissionSyncDurableObject extends DurableObject<SubmissionSyncEnv
       });
 
       if (result.status === "running") {
+        await this.ctx.storage.put(jobStorageKey, {
+          ...job,
+          retryCount: 0,
+        });
         await this.ctx.storage.setAlarm(Date.now() + alarmDelayMs);
         return;
       }
 
       await this.ctx.storage.delete(jobStorageKey);
     } catch (error) {
+      const job = await this.ctx.storage.get<SubmissionSyncJob>(jobStorageKey);
+      const retryCount = (job?.retryCount ?? 0) + 1;
+
       console.error("[sync-do] alarm failed", {
         error: error instanceof Error ? error.message : error,
+        retryCount,
       });
-      throw error;
+
+      if (!job) {
+        return;
+      }
+
+      if (retryCount >= maxAlarmRetries) {
+        await this.ctx.storage.delete(jobStorageKey);
+        return;
+      }
+
+      await this.ctx.storage.put(jobStorageKey, {
+        ...job,
+        retryCount,
+      });
+      await this.ctx.storage.setAlarm(Date.now() + alarmDelayMs);
     }
   }
 }

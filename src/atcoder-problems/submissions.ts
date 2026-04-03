@@ -109,7 +109,11 @@ const createSolvedProblemStatement = (
         synced_at
       ) VALUES (?, ?, ?, ?)
       ON CONFLICT(atcoder_user_id, problem_id) DO UPDATE SET
-        solved_at = excluded.solved_at,
+        solved_at = CASE
+          WHEN solved_problems.solved_at IS NULL THEN excluded.solved_at
+          WHEN excluded.solved_at IS NULL THEN solved_problems.solved_at
+          ELSE MIN(solved_problems.solved_at, excluded.solved_at)
+        END,
         synced_at = excluded.synced_at`,
     )
     .bind(

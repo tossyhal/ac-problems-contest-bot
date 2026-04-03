@@ -15,7 +15,7 @@ type CreateContestInput = {
 };
 
 type CreateContestResponse = {
-  contest_id: string;
+  contest_id?: string;
 };
 
 const contestBaseUrl = "https://kenkoooo.com/atcoder";
@@ -63,6 +63,12 @@ export const createContest = async (
   );
   await ensureOk(createResponse, "contest/create");
   const createBody = (await createResponse.json()) as CreateContestResponse;
+  const contestId = createBody.contest_id;
+
+  if (typeof contestId !== "string" || contestId.length === 0) {
+    throw new Error("contest/create failed: missing contest_id");
+  }
+
   await sleep(input.sleepMs ?? atCoderProblemsRequestIntervalMs);
 
   const updateResponse = await fetchFn(
@@ -71,7 +77,7 @@ export const createContest = async (
       method: "POST",
       headers: createHeaders(input.token),
       body: JSON.stringify({
-        contest_id: createBody.contest_id,
+        contest_id: contestId,
         problems: input.problems,
       }),
     },
@@ -79,7 +85,7 @@ export const createContest = async (
   await ensureOk(updateResponse, "contest/item/update");
 
   return {
-    contestId: createBody.contest_id,
-    contestUrl: `${contestBaseUrl}/#/contest/show/${createBody.contest_id}`,
+    contestId,
+    contestUrl: `${contestBaseUrl}/#/contest/show/${contestId}`,
   };
 };

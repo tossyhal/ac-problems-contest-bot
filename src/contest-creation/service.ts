@@ -130,6 +130,43 @@ const updateContestRun = async (
     .run();
 };
 
+const recordBookkeepingFailure = async (
+  database: D1Database,
+  input: {
+    commandContext?: string;
+    commandName: "custom-start" | "start";
+    contestUrl: string;
+    error: unknown;
+    settingsSummary: string;
+  },
+) => {
+  const message =
+    input.error instanceof Error
+      ? input.error.message
+      : "contest bookkeeping failed";
+
+  console.error("[contest] post-create bookkeeping failed", {
+    commandName: input.commandName,
+    contestUrl: input.contestUrl,
+    error: message,
+  });
+
+  try {
+    await insertCommandLog(database, {
+      commandContext: input.commandContext,
+      commandName: input.commandName,
+      message: `${input.contestUrl}\nbookkeeping error: ${message}`,
+      settingsSummary: input.settingsSummary,
+      status: "completed",
+    });
+  } catch (logError) {
+    console.error("[contest] failed to record bookkeeping error", {
+      contestUrl: input.contestUrl,
+      error: logError instanceof Error ? logError.message : logError,
+    });
+  }
+};
+
 const insertProblemUsageLogs = async (
   database: D1Database,
   input: {
@@ -220,13 +257,14 @@ export const executeContestCreation = async (
       token: input.atCoderProblemsToken,
     });
 
-    await Promise.all([
-      updateContestRun(database, {
-        contestId: createdContest.contestId,
-        contestRunId,
-        contestUrl: createdContest.contestUrl,
-        status: "completed",
-      }),
+    await updateContestRun(database, {
+      contestId: createdContest.contestId,
+      contestRunId,
+      contestUrl: createdContest.contestUrl,
+      status: "completed",
+    });
+
+    const bookkeepingResults = await Promise.allSettled([
       insertProblemUsageLogs(database, {
         contestRunId,
         problemIds: selectedProblems.map((problem) => problem.problem_id),
@@ -240,6 +278,18 @@ export const executeContestCreation = async (
         status: "completed",
       }),
     ]);
+
+    for (const result of bookkeepingResults) {
+      if (result.status === "rejected") {
+        await recordBookkeepingFailure(database, {
+          commandContext: input.commandContext,
+          commandName: input.commandName,
+          contestUrl: createdContest.contestUrl,
+          error: result.reason,
+          settingsSummary: input.settingsSummary,
+        });
+      }
+    }
 
     return {
       ...createdContest,
