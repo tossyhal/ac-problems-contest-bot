@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { app } from "../src/app";
+import { createDiscordInteractionHandler } from "../src/discord/handler";
 
 const encoder = new TextEncoder();
 
@@ -442,6 +443,196 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain("バチャを作成しました。");
     expect(body.data.content).toContain("開始時刻:");
   }, 10000);
+
+  it("returns deferred response and patches follow-up on start", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+        {
+          contest_id: "abc100",
+          difficulty: 920,
+          is_experimental: 0,
+          problem_id: "abc100_b",
+          problem_index: "B",
+          source_category: "ABC",
+          title: "B",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 2,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    const patchedMessages: string[] = [];
+    let waitUntilPromise: Promise<unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+
+        if (url.includes("/atcoder-api/v3/user/submissions")) {
+          return Response.json([]);
+        }
+
+        if (url.endsWith("/internal-api/contest/create")) {
+          return Response.json({
+            contest_id: "contest-123",
+          });
+        }
+
+        if (url.endsWith("/internal-api/contest/item/update")) {
+          return new Response(null, {
+            status: 200,
+          });
+        }
+
+        if (url.includes("/webhooks/") && init?.method === "PATCH") {
+          const body = JSON.parse(String(init.body)) as { content: string };
+          patchedMessages.push(body.content);
+          return new Response(null, {
+            status: 200,
+          });
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
+    const request = await createSignedDiscordRequest(
+      {
+        application_id: "app-123",
+        data: {
+          name: "start",
+        },
+        id: "interaction-123",
+        token: "interaction-token-123",
+        type: 2,
+      },
+      database,
+    );
+    const handler = createDiscordInteractionHandler(
+      "test-token",
+      undefined,
+      request.env.DISCORD_PUBLIC_KEY,
+      database,
+      undefined,
+      undefined,
+      {
+        waitUntil: (promise: Promise<unknown>) => {
+          waitUntilPromise = promise;
+        },
+      } as ExecutionContext,
+    );
+    const response = await handler(
+      new Request("http://localhost/discord/interactions", {
+        body: request.body,
+        headers: request.headers,
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ type: 5 });
+    expect(waitUntilPromise).toBeDefined();
+    await waitUntilPromise;
+    expect(patchedMessages).toHaveLength(1);
+    expect(patchedMessages[0]).toContain(
+      "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
+    );
+  }, 10000);
+
+  it("patches deferred error details when command handling fails before execution", async () => {
+    const request = await createSignedDiscordRequest({
+      application_id: "app-123",
+      data: {
+        name: "start",
+      },
+      id: "interaction-123",
+      token: "interaction-token-123",
+      type: 2,
+    });
+    const patchedMessages: string[] = [];
+    let waitUntilPromise: Promise<unknown> | undefined;
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+
+        if (url.includes("/webhooks/") && init?.method === "PATCH") {
+          const body = JSON.parse(String(init.body)) as { content: string };
+          patchedMessages.push(body.content);
+          return new Response(null, {
+            status: 200,
+          });
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
+    const handler = createDiscordInteractionHandler(
+      "test-token",
+      undefined,
+      request.env.DISCORD_PUBLIC_KEY,
+      undefined,
+      undefined,
+      undefined,
+      {
+        waitUntil: (promise: Promise<unknown>) => {
+          waitUntilPromise = promise;
+        },
+      } as ExecutionContext,
+    );
+    const response = await handler(
+      new Request("http://localhost/discord/interactions", {
+        body: request.body,
+        headers: request.headers,
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ type: 5 });
+    expect(waitUntilPromise).toBeDefined();
+    await waitUntilPromise;
+    expect(patchedMessages).toContain("DB binding is not configured.");
+  });
 
   it("reuses existing contest URL when the same fingerprint already completed", async () => {
     vi.useFakeTimers();

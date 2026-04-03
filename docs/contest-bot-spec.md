@@ -213,6 +213,7 @@ Cloudflare は以下の役割を持つ。
 ### 補足
 - 通常メッセージで返す
 - ephemeral は使わない
+- Discord の 3 秒制限を避けるため、`/start` と `/custom-start` は deferred response を返し、完了後に original response を更新する
 
 ---
 

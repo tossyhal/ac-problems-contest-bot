@@ -5,11 +5,17 @@ const encoder = new TextEncoder();
 const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
 
 type DiscordPingInteraction = {
+  application_id?: string;
+  id?: string;
+  token?: string;
   type: 1;
 };
 
 type DiscordApplicationCommandInteraction = {
+  application_id: string;
   type: 2;
+  id: string;
+  token: string;
   data: {
     name: string;
   };
@@ -76,6 +82,54 @@ const isApplicationCommandInteraction = (
 ): interaction is DiscordApplicationCommandInteraction =>
   interaction.type === 2;
 
+const createDeferredResponse = () =>
+  Response.json({
+    type: 5,
+  });
+
+const editOriginalInteractionResponse = async (
+  applicationId: string,
+  interactionToken: string,
+  content: string,
+  fetchFn: typeof fetch = fetch,
+) => {
+  const response = await fetchFn(
+    `https://discord.com/api/v10/webhooks/${applicationId}/${interactionToken}/messages/@original`,
+    {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        content,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Discord follow-up failed with status ${response.status}.`);
+  }
+};
+
+const extractResponseErrorMessage = async (response: Response) => {
+  const body = await response.text();
+
+  if (!body) {
+    return "コマンド処理に失敗しました。";
+  }
+
+  try {
+    const payload = JSON.parse(body) as {
+      error?: string;
+      message?: string;
+    };
+
+    return payload.error ?? payload.message ?? body;
+  } catch {
+    return body;
+  }
+};
+
 export const createDiscordInteractionHandler =
   (
     atCoderProblemsToken: string | undefined,
@@ -84,6 +138,7 @@ export const createDiscordInteractionHandler =
     database: D1Database | undefined,
     problemCatalogSync: DurableObjectNamespace | undefined,
     submissionSync?: DurableObjectNamespace,
+    executionCtx?: ExecutionContext,
   ) =>
   async (request: Request) => {
     if (!publicKeyHex) {
@@ -116,6 +171,67 @@ export const createDiscordInteractionHandler =
       isApplicationCommandInteraction(interaction) &&
       knownCommands.has(interaction.data.name)
     ) {
+      if (
+        executionCtx &&
+        (interaction.data.name === "start" ||
+          interaction.data.name === "custom-start")
+      ) {
+        executionCtx.waitUntil(
+          handleDiscordCommand(database, interaction, {
+            atCoderProblemsToken,
+            contestCreationGuard,
+            problemCatalogSync,
+            submissionSync,
+          })
+            .then(async (response) => {
+              if (!response.ok) {
+                await editOriginalInteractionResponse(
+                  interaction.application_id,
+                  interaction.token,
+                  await extractResponseErrorMessage(response),
+                );
+                return;
+              }
+
+              const payload = (await response.json()) as {
+                data?: { content?: string };
+              };
+
+              await editOriginalInteractionResponse(
+                interaction.application_id,
+                interaction.token,
+                payload.data?.content ?? "コマンド処理が完了しました。",
+              );
+            })
+            .catch(async (error) => {
+              console.error("[discord] deferred command failed", {
+                commandName: interaction.data.name,
+                error: error instanceof Error ? error.message : error,
+              });
+
+              try {
+                await editOriginalInteractionResponse(
+                  interaction.application_id,
+                  interaction.token,
+                  error instanceof Error
+                    ? error.message
+                    : "コマンド処理に失敗しました。",
+                );
+              } catch (followupError) {
+                console.error("[discord] deferred follow-up failed", {
+                  commandName: interaction.data.name,
+                  error:
+                    followupError instanceof Error
+                      ? followupError.message
+                      : followupError,
+                });
+              }
+            }),
+        );
+
+        return createDeferredResponse();
+      }
+
       return handleDiscordCommand(database, interaction, {
         atCoderProblemsToken,
         contestCreationGuard,
