@@ -1,4 +1,8 @@
-import { syncUserSubmissions } from "../atcoder-problems/submissions";
+import {
+  getSyncState as getSubmissionSyncState,
+  markSyncQueued,
+  syncUserSubmissionsBatch,
+} from "../atcoder-problems/submissions";
 
 type DiscordCommandOption = {
   name: string;
@@ -42,18 +46,9 @@ type DifficultyBandRecord = {
   problem_count: number;
 };
 
-type SyncStateRecord = {
-  status: string;
-  full_sync_completed_at: number | null;
-  last_synced_at: number | null;
-  last_checkpoint: string | null;
-  last_success_checkpoint: string | null;
-  last_error: string | null;
-};
-
 type CommandOptions = {
-  executionContext?: ExecutionContext;
   fetchFn?: typeof fetch;
+  submissionSync?: DurableObjectNamespace;
 };
 
 const defaultSettingRecord: SettingRecord = {
@@ -182,34 +177,6 @@ const getDifficultyBands = async (database: D1Database) => {
     .all<DifficultyBandRecord>();
 
   return result.results;
-};
-
-const getSyncState = async (database: D1Database) => {
-  const result = await database
-    .prepare(
-      `SELECT
-        status,
-        full_sync_completed_at,
-        last_synced_at,
-        last_checkpoint,
-        last_success_checkpoint,
-        last_error
-      FROM sync_states
-      WHERE scope = ?`,
-    )
-    .bind("submissions")
-    .first<SyncStateRecord>();
-
-  return (
-    result ?? {
-      status: "idle",
-      full_sync_completed_at: null,
-      last_synced_at: null,
-      last_checkpoint: null,
-      last_success_checkpoint: null,
-      last_error: null,
-    }
-  );
 };
 
 const replaceDifficultyBands = async (
@@ -386,7 +353,7 @@ const createSettingSummary = (
     `開始時刻区切り: ${setting.default_slot_minutes}分`,
     `問題数: ${setting.default_problem_count}`,
     `コンテスト時間: ${setting.default_contest_duration_minutes}分`,
-    `penalty second: ${setting.default_penalty_seconds}`,
+    `ペナルティ: ${setting.default_penalty_seconds}秒`,
     `experimental difficulty: ${booleanLabel(setting.include_experimental_difficulty)}`,
     `出典フィルタ: ABC=${booleanLabel(setting.include_abc)}, ARC=${booleanLabel(setting.include_arc)}, AGC=${booleanLabel(setting.include_agc)}, OTHER=${booleanLabel(setting.allow_other_sources)}`,
     `直近使用問題除外: ${setting.exclude_recently_used_days}日`,
@@ -420,7 +387,7 @@ const handleCustomStart = (
   const lines = [
     "条件を上書きしたバチャ作成は未実装です。",
     `problem-count: ${problemCount ?? "未指定"}`,
-    `contest-duration-minutes: ${contestDurationMinutes ?? "未指定"}`,
+    `contest-minutes: ${contestDurationMinutes ?? "未指定"}`,
     `slot-minutes: ${slotMinutes ?? "未指定"}`,
     `unsolved-only: ${unsolvedOnly ?? "未指定"}`,
     `include-experimental-difficulty: ${includeExperimentalDifficulty ?? "未指定"}`,
@@ -506,14 +473,21 @@ const handleInit = async (
       );
     }
 
-    const syncPromise = syncUserSubmissions({
-      database,
-      userId: setting.atcoder_user_id,
-      fetchFn: options.fetchFn,
-    });
+    if (options.submissionSync) {
+      await markSyncQueued(database);
+      const stub = options.submissionSync.get(
+        options.submissionSync.idFromName(setting.atcoder_user_id),
+      );
+      const response = await stub.fetch("https://submission-sync/start", {
+        method: "POST",
+        body: JSON.stringify({
+          userId: setting.atcoder_user_id,
+        }),
+      });
 
-    if (options.executionContext) {
-      options.executionContext.waitUntil(syncPromise);
+      if (!response.ok) {
+        return createResponse("初期同期ジョブの開始に失敗しました。");
+      }
 
       return createResponse(
         [
@@ -523,9 +497,14 @@ const handleInit = async (
       );
     }
 
-    await syncPromise;
+    await markSyncQueued(database);
+    await syncUserSubmissionsBatch({
+      database,
+      fetchFn: options.fetchFn,
+      userId: setting.atcoder_user_id,
+    });
 
-    const syncState = await getSyncState(database);
+    const syncState = await getSubmissionSyncState(database);
 
     return createResponse(
       [
@@ -538,7 +517,7 @@ const handleInit = async (
     );
   }
 
-  const syncState = await getSyncState(database);
+  const syncState = await getSubmissionSyncState(database);
   const lines = [
     "現在の同期状態:",
     `status: ${syncState.status}`,

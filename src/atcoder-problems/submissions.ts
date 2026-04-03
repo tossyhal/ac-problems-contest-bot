@@ -5,7 +5,7 @@ type SubmissionRecord = {
   result: string;
 };
 
-type SyncStateRecord = {
+export type SyncStateRecord = {
   status: string;
   full_sync_completed_at: number | null;
   last_synced_at: number | null;
@@ -14,23 +14,32 @@ type SyncStateRecord = {
   last_error: string | null;
 };
 
-type SyncOptions = {
+type SyncBatchOptions = {
   database: D1Database;
-  userId: string;
   fetchFn?: typeof fetch;
-  sleepMs?: number;
+  userId: string;
+};
+
+type SyncBatchResult = {
+  batchSize: number;
+  lastCheckpoint: string | null;
+  status: "completed" | "failed" | "running";
 };
 
 const atCoderProblemsApiBaseUrl = "https://kenkoooo.com/atcoder/atcoder-api/v3";
 
 const syncScope = "submissions";
 
-const sleep = (ms: number) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+const defaultSyncState: SyncStateRecord = {
+  status: "idle",
+  full_sync_completed_at: null,
+  last_synced_at: null,
+  last_checkpoint: null,
+  last_success_checkpoint: null,
+  last_error: null,
+};
 
-const getSyncState = async (database: D1Database) => {
+export const getSyncState = async (database: D1Database) => {
   const result = await database
     .prepare(
       `SELECT
@@ -46,19 +55,10 @@ const getSyncState = async (database: D1Database) => {
     .bind(syncScope)
     .first<SyncStateRecord>();
 
-  return (
-    result ?? {
-      status: "idle",
-      full_sync_completed_at: null,
-      last_synced_at: null,
-      last_checkpoint: null,
-      last_success_checkpoint: null,
-      last_error: null,
-    }
-  );
+  return result ?? defaultSyncState;
 };
 
-const upsertSyncState = async (
+export const upsertSyncState = async (
   database: D1Database,
   syncState: SyncStateRecord,
 ) => {
@@ -94,12 +94,13 @@ const upsertSyncState = async (
     .run();
 };
 
-const upsertSolvedProblem = async (
+const createSolvedProblemStatement = (
   database: D1Database,
+  syncedAt: number,
   userId: string,
   submission: SubmissionRecord,
-) => {
-  await database
+) =>
+  database
     .prepare(
       `INSERT INTO solved_problems (
         atcoder_user_id,
@@ -115,15 +116,41 @@ const upsertSolvedProblem = async (
       userId,
       submission.problem_id,
       submission.epoch_second * 1000,
-      Date.now(),
-    )
-    .run();
+      syncedAt,
+    );
+
+const upsertSolvedProblems = async (
+  database: D1Database,
+  userId: string,
+  submissions: SubmissionRecord[],
+) => {
+  const acceptedSubmissions = submissions.filter(
+    (submission) => submission.result === "AC",
+  );
+
+  if (acceptedSubmissions.length === 0) {
+    return;
+  }
+
+  const syncedAt = Date.now();
+  const statements = acceptedSubmissions.map((submission) =>
+    createSolvedProblemStatement(database, syncedAt, userId, submission),
+  );
+
+  if ("batch" in database && typeof database.batch === "function") {
+    await database.batch(statements);
+    return;
+  }
+
+  for (const statement of statements) {
+    await statement.run();
+  }
 };
 
 const fetchUserSubmissions = async (
-  userId: string,
-  fromSecond: number,
   fetchFn: typeof fetch,
+  fromSecond: number,
+  userId: string,
 ) => {
   const url = new URL(`${atCoderProblemsApiBaseUrl}/user/submissions`);
   url.searchParams.set("user", userId);
@@ -141,10 +168,6 @@ const fetchUserSubmissions = async (
 };
 
 const getStartFromSecond = (syncState: SyncStateRecord) => {
-  if (syncState.full_sync_completed_at) {
-    return 0;
-  }
-
   const checkpoint = Number(syncState.last_success_checkpoint ?? "0");
 
   if (!Number.isFinite(checkpoint) || checkpoint < 0) {
@@ -154,14 +177,24 @@ const getStartFromSecond = (syncState: SyncStateRecord) => {
   return Math.max(0, checkpoint - 1);
 };
 
-export const syncUserSubmissions = async ({
+export const markSyncQueued = async (database: D1Database) => {
+  const currentSyncState = await getSyncState(database);
+
+  await upsertSyncState(database, {
+    ...currentSyncState,
+    status: "queued",
+    last_error: null,
+  });
+};
+
+export const syncUserSubmissionsBatch = async ({
   database,
-  userId,
   fetchFn = fetch,
-  sleepMs = 5000,
-}: SyncOptions) => {
+  userId,
+}: SyncBatchOptions): Promise<SyncBatchResult> => {
   const initialSyncState = await getSyncState(database);
-  let fromSecond = getStartFromSecond(initialSyncState);
+  const fromSecond = getStartFromSecond(initialSyncState);
+  const previousCheckpoint = initialSyncState.last_success_checkpoint ?? "0";
 
   await upsertSyncState(database, {
     ...initialSyncState,
@@ -169,76 +202,96 @@ export const syncUserSubmissions = async ({
     last_error: null,
   });
 
-  let lastCheckpoint = initialSyncState.last_success_checkpoint ?? "0";
+  console.log("[sync] batch start", {
+    fromSecond,
+    userId,
+  });
 
   try {
-    while (true) {
-      const submissions = await fetchUserSubmissions(
-        userId,
-        fromSecond,
-        fetchFn,
-      );
-      const now = Date.now();
+    const submissions = await fetchUserSubmissions(fetchFn, fromSecond, userId);
+    const now = Date.now();
 
-      if (submissions.length === 0) {
-        await upsertSyncState(database, {
-          status: "completed",
-          full_sync_completed_at: now,
-          last_synced_at: now,
-          last_checkpoint: lastCheckpoint,
-          last_success_checkpoint: lastCheckpoint,
-          last_error: null,
-        });
-        return;
-      }
+    console.log("[sync] batch fetched", {
+      count: submissions.length,
+      fromSecond,
+      userId,
+    });
 
-      for (const submission of submissions) {
-        if (submission.result === "AC") {
-          await upsertSolvedProblem(database, userId, submission);
-        }
-      }
-
-      const maxEpochSecond = submissions.reduce(
-        (currentMax, submission) =>
-          Math.max(currentMax, submission.epoch_second),
-        fromSecond,
-      );
-      lastCheckpoint = String(maxEpochSecond);
-
+    if (submissions.length === 0) {
       await upsertSyncState(database, {
-        status: "running",
-        full_sync_completed_at: null,
+        status: "completed",
+        full_sync_completed_at: now,
         last_synced_at: now,
-        last_checkpoint: lastCheckpoint,
-        last_success_checkpoint: lastCheckpoint,
+        last_checkpoint: previousCheckpoint,
+        last_success_checkpoint: previousCheckpoint,
         last_error: null,
       });
 
-      if (submissions.length < 500) {
-        await upsertSyncState(database, {
-          status: "completed",
-          full_sync_completed_at: now,
-          last_synced_at: now,
-          last_checkpoint: lastCheckpoint,
-          last_success_checkpoint: lastCheckpoint,
-          last_error: null,
-        });
-        return;
-      }
+      console.log("[sync] batch completed without new submissions", {
+        lastCheckpoint: previousCheckpoint,
+        userId,
+      });
 
-      fromSecond = maxEpochSecond + 1;
-      await sleep(sleepMs);
+      return {
+        batchSize: 0,
+        lastCheckpoint: previousCheckpoint,
+        status: "completed",
+      };
     }
+
+    await upsertSolvedProblems(database, userId, submissions);
+
+    const maxEpochSecond = submissions.reduce(
+      (currentMax, submission) => Math.max(currentMax, submission.epoch_second),
+      fromSecond,
+    );
+    const lastCheckpoint = String(maxEpochSecond);
+    const nextStatus = submissions.length < 500 ? "completed" : "running";
+
+    await upsertSyncState(database, {
+      status: nextStatus,
+      full_sync_completed_at: nextStatus === "completed" ? now : null,
+      last_synced_at: now,
+      last_checkpoint: lastCheckpoint,
+      last_success_checkpoint: lastCheckpoint,
+      last_error: null,
+    });
+
+    console.log("[sync] batch updated", {
+      batchSize: submissions.length,
+      lastCheckpoint,
+      status: nextStatus,
+      userId,
+    });
+
+    return {
+      batchSize: submissions.length,
+      lastCheckpoint,
+      status: nextStatus,
+    };
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "同期に失敗しました。";
+
     await upsertSyncState(database, {
       status: "failed",
       full_sync_completed_at: initialSyncState.full_sync_completed_at,
       last_synced_at: initialSyncState.last_synced_at,
-      last_checkpoint: lastCheckpoint,
-      last_success_checkpoint: lastCheckpoint,
-      last_error:
-        error instanceof Error ? error.message : "同期に失敗しました。",
+      last_checkpoint: initialSyncState.last_checkpoint,
+      last_success_checkpoint: initialSyncState.last_success_checkpoint,
+      last_error: message,
     });
-    throw error;
+
+    console.error("[sync] batch failed", {
+      error: message,
+      fromSecond,
+      userId,
+    });
+
+    return {
+      batchSize: 0,
+      lastCheckpoint: initialSyncState.last_success_checkpoint,
+      status: "failed",
+    };
   }
 };

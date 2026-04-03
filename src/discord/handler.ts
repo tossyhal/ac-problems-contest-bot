@@ -80,7 +80,7 @@ export const createDiscordInteractionHandler =
   (
     publicKeyHex: string | undefined,
     database: D1Database | undefined,
-    executionContext?: ExecutionContext,
+    submissionSync?: DurableObjectNamespace,
   ) =>
   async (request: Request) => {
     if (!publicKeyHex) {
@@ -114,7 +114,7 @@ export const createDiscordInteractionHandler =
       knownCommands.has(interaction.data.name)
     ) {
       return handleDiscordCommand(database, interaction, {
-        executionContext,
+        submissionSync,
       });
     }
 

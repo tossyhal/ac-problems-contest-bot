@@ -16,6 +16,13 @@ const createMockDatabase = () => {
   let solvedProblemRecords: Record<string, unknown>[] = [];
 
   return {
+    batch: async (statements: { run: () => Promise<unknown> }[]) => {
+      for (const statement of statements) {
+        await statement.run();
+      }
+
+      return [];
+    },
     prepare: (query: string) => ({
       bind: (...params: unknown[]) => ({
         first: async () => {
@@ -375,6 +382,89 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain("初期同期を完了しました。");
     expect(body.data.content).toContain("status: completed");
     expect(body.data.content).toContain("last checkpoint: 1712131201");
+  });
+
+  it("queues init when submission sync durable object is available", async () => {
+    const database = createMockDatabase();
+    let startRequests = 0;
+    const updateRequest = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "setting",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "update",
+            },
+            {
+              name: "atcoder-user-id",
+              type: 3,
+              value: "tossyhal",
+            },
+          ],
+        },
+      },
+      database,
+    );
+    await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: updateRequest.headers,
+        body: updateRequest.body,
+      },
+      updateRequest.env,
+    );
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "init",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "run",
+            },
+          ],
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        SUBMISSION_SYNC: {
+          get: () => ({
+            fetch: async () => {
+              startRequests += 1;
+
+              return Response.json({
+                status: "queued",
+              });
+            },
+          }),
+          idFromName: () => "submission-sync-id",
+        } as unknown as DurableObjectNamespace,
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("初期同期を開始しました。");
+    expect(startRequests).toBe(1);
   });
 
   it("updates settings and shows persisted values", async () => {
