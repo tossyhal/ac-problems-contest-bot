@@ -33,6 +33,12 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
+起動後は以下で API 関連の確認ができます。
+
+- OpenAPI JSON: `http://localhost:8787/doc`
+- Scalar API Reference: `http://localhost:8787/reference`
+- Health check: `http://localhost:8787/health`
+
 ## チェック
 
 ```bash
