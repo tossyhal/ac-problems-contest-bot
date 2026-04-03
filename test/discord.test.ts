@@ -781,6 +781,137 @@ describe("discord interactions", () => {
     );
   });
 
+  it("marks submission sync failed when incremental sync handoff to DO fails", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 1,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/atcoder-api/v3/user/submissions")) {
+        return Response.json(
+          Array.from({ length: 500 }, (_, index) => ({
+            epoch_second: 1712131200 + index,
+            id: index + 1,
+            problem_id: `abc100_${index}`,
+            result: "AC",
+          })),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+        SUBMISSION_SYNC: {
+          get: () => ({
+            fetch: async () => {
+              throw new Error("submission sync handoff failed");
+            },
+          }),
+          idFromName: () => "submission-sync-id",
+        } as unknown as DurableObjectNamespace,
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("提出同期ジョブの開始に失敗しました。");
+    expect(body.data.content).toContain("submission sync handoff failed");
+    await expect(
+      (
+        database as unknown as {
+          prepare: (query: string) => {
+            bind: (...params: unknown[]) => { first: () => Promise<unknown> };
+          };
+        }
+      )
+        .prepare(
+          `SELECT
+            status,
+            full_sync_completed_at,
+            last_synced_at,
+            last_checkpoint,
+            last_success_checkpoint,
+            last_error
+          FROM sync_states
+          WHERE scope = ?`,
+        )
+        .bind("submissions")
+        .first(),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        last_error: "submission sync handoff failed",
+        status: "failed",
+      }),
+    );
+  });
+
   it("shows current settings from D1 defaults", async () => {
     const request = await createSignedDiscordRequest({
       type: 2,

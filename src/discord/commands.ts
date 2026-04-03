@@ -8,6 +8,7 @@ import {
   getSyncState as getSubmissionSyncState,
   markSyncQueued,
   syncUserSubmissionsBatch,
+  upsertSyncState,
 } from "../atcoder-problems/submissions";
 import { executeContestCreation } from "../contest-creation/service";
 import { insertCommandLog } from "../db/command-log";
@@ -570,7 +571,26 @@ const ensureSubmissionSyncReadyForContest = async (
       };
     }
 
-    await startSubmissionSyncJob(options.submissionSync, userId);
+    try {
+      await startSubmissionSyncJob(options.submissionSync, userId);
+    } catch (error) {
+      const currentState = await getSubmissionSyncState(database);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "提出同期ジョブの開始に失敗しました。";
+
+      await upsertSyncState(database, {
+        ...currentState,
+        last_error: message,
+        status: "failed",
+      });
+
+      return {
+        message: `提出同期ジョブの開始に失敗しました。${message}`,
+        ready: false,
+      };
+    }
 
     return {
       message: `提出情報の増分同期を開始しました。少し待ってから /${commandName} を再実行してください。`,
