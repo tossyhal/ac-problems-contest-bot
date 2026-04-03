@@ -57,20 +57,23 @@ const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
     point: (index + 1) * 100,
   }));
 
-const incrementNextContestSequence = async (
-  database: D1Database,
-  currentSequence: number,
-) => {
-  await database
+const reserveNextContestSequence = async (database: D1Database) => {
+  const result = await database
     .prepare(
       `UPDATE settings
       SET
-        next_contest_sequence = ?,
+        next_contest_sequence = next_contest_sequence + 1,
         updated_at = (cast((julianday('now') - 2440587.5) * 86400000 as integer))
-      WHERE id = 1`,
+      WHERE id = 1
+      RETURNING next_contest_sequence - 1 AS contest_sequence`,
     )
-    .bind(currentSequence + 1)
-    .run();
+    .first<{ contest_sequence: number | string }>();
+
+  if (!result) {
+    throw new Error("settings レコードが見つからないため採番できません。");
+  }
+
+  return Number(result.contest_sequence);
 };
 
 const insertContestRun = async (
@@ -204,7 +207,7 @@ export const executeContestCreation = async (
       unsolvedOnly: input.unsolvedOnly,
       userId: input.userId,
     });
-    const contestSequence = input.settings.next_contest_sequence;
+    const contestSequence = await reserveNextContestSequence(database);
     const createdContest = await createContest(input.fetchFn ?? fetch, {
       durationSecond: input.durationSecond,
       isPublic: input.isPublic,
@@ -229,7 +232,6 @@ export const executeContestCreation = async (
         problemIds: selectedProblems.map((problem) => problem.problem_id),
         usedAt: input.startTimeMs,
       }),
-      incrementNextContestSequence(database, contestSequence),
       insertCommandLog(database, {
         commandContext: input.commandContext,
         commandName: input.commandName,

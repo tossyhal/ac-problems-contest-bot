@@ -1,6 +1,7 @@
 import { handleDiscordCommand } from "./commands";
 
 const encoder = new TextEncoder();
+const discordRequestToleranceMs = 5 * 60 * 1000;
 
 const knownCommands = new Set(["start", "custom-start", "setting", "init"]);
 
@@ -54,6 +55,15 @@ export const verifyDiscordRequest = async (
   const timestamp = request.headers.get("x-signature-timestamp");
 
   if (!signature || !timestamp) {
+    return null;
+  }
+
+  const timestampMs = Number(timestamp) * 1000;
+
+  if (
+    !Number.isFinite(timestampMs) ||
+    Math.abs(Date.now() - timestampMs) > discordRequestToleranceMs
+  ) {
     return null;
   }
 

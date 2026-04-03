@@ -204,6 +204,24 @@ const createMockDatabase = (
         },
       }),
       first: async () => {
+        if (
+          query.includes("UPDATE settings") &&
+          query.includes(
+            "RETURNING next_contest_sequence - 1 AS contest_sequence",
+          )
+        ) {
+          if (!settingRecord) {
+            return null;
+          }
+
+          const contestSequence = Number(settingRecord.next_contest_sequence);
+          settingRecord.next_contest_sequence = contestSequence + 1;
+
+          return {
+            contest_sequence: contestSequence,
+          };
+        }
+
         if (query.includes("FROM settings")) {
           return settingRecord;
         }
@@ -240,6 +258,9 @@ const createMockDatabase = (
 const createSignedDiscordRequest = async (
   payload: unknown,
   database: D1Database = createMockDatabase(),
+  options?: {
+    timestamp?: string;
+  },
 ) => {
   const keyPair = (await crypto.subtle.generateKey("Ed25519", true, [
     "sign",
@@ -250,7 +271,7 @@ const createSignedDiscordRequest = async (
     keyPair.publicKey,
   )) as ArrayBuffer;
   const body = JSON.stringify(payload);
-  const timestamp = "1712131200";
+  const timestamp = options?.timestamp ?? String(Math.floor(Date.now() / 1000));
   const signature = await crypto.subtle.sign(
     "Ed25519",
     keyPair.privateKey,
@@ -309,6 +330,34 @@ describe("discord interactions", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ type: 1 });
+  });
+
+  it("rejects stale signed Discord requests", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-03T12:00:00.000Z"));
+    const request = await createSignedDiscordRequest(
+      { type: 1 },
+      createMockDatabase(),
+      {
+        timestamp: String(
+          Math.floor(new Date("2026-04-03T11:50:00.000Z").getTime() / 1000),
+        ),
+      },
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid Discord signature.",
+    });
   });
 
   it("dispatches known slash commands", async () => {
@@ -660,17 +709,21 @@ describe("discord interactions", () => {
     );
     const requestFingerprint = await createSha256Hex(
       JSON.stringify({
+        allowOtherSources: 0,
+        defaultContestDurationMinutes: 100,
+        defaultPenaltySeconds: 300,
+        defaultProblemCount: 1,
         difficultyBands: [],
         excludeRecentlyUsedDays: 14,
-        startEpochSecond,
-        unsolvedOnly: true,
-        userId: "tossyhal",
-        visibility: "private",
         includeAbc: 1,
         includeAgc: 0,
         includeArc: 0,
         includeExperimentalDifficulty: 0,
-        allowOtherSources: 0,
+        memo: "",
+        startEpochSecond,
+        unsolvedOnly: true,
+        userId: "tossyhal",
+        visibility: "private",
       }),
     );
     const database = createMockDatabase({
@@ -777,6 +830,165 @@ describe("discord interactions", () => {
       "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
     );
     expect(createCalls).toBe(0);
+  });
+
+  it("uses a different request fingerprint when contest duration differs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-03T11:01:00.000Z"));
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 1,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    const requestedFingerprints: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/atcoder-api/v3/user/submissions")) {
+        return Response.json([]);
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const firstRequest = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: firstRequest.headers,
+        body: firstRequest.body,
+      },
+      {
+        ...firstRequest.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+        CONTEST_CREATION_GUARD: {
+          get: () => ({
+            fetch: async (_url: string, init?: RequestInit) => {
+              const payload = JSON.parse(String(init?.body ?? "{}")) as {
+                requestFingerprint: string;
+              };
+              requestedFingerprints.push(payload.requestFingerprint);
+
+              return Response.json({
+                contestId: `contest-${requestedFingerprints.length}`,
+                contestUrl: `https://kenkoooo.com/atcoder/#/contest/show/contest-${requestedFingerprints.length}`,
+                reused: false,
+              });
+            },
+          }),
+          idFromName: (name: string) => name,
+        } as unknown as DurableObjectNamespace,
+      },
+    );
+
+    const secondRequest = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "custom-start",
+          options: [
+            {
+              name: "contest-minutes",
+              type: 4,
+              value: 120,
+            },
+          ],
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: secondRequest.headers,
+        body: secondRequest.body,
+      },
+      {
+        ...secondRequest.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+        CONTEST_CREATION_GUARD: {
+          get: () => ({
+            fetch: async (_url: string, init?: RequestInit) => {
+              const payload = JSON.parse(String(init?.body ?? "{}")) as {
+                requestFingerprint: string;
+              };
+              requestedFingerprints.push(payload.requestFingerprint);
+
+              return Response.json({
+                contestId: `contest-${requestedFingerprints.length}`,
+                contestUrl: `https://kenkoooo.com/atcoder/#/contest/show/contest-${requestedFingerprints.length}`,
+                reused: false,
+              });
+            },
+          }),
+          idFromName: (name: string) => name,
+        } as unknown as DurableObjectNamespace,
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "https://kenkoooo.com/atcoder/#/contest/show/contest-2",
+    );
+    expect(requestedFingerprints).toHaveLength(2);
+    expect(requestedFingerprints[0]).not.toBe(requestedFingerprints[1]);
   });
 
   it("queues incremental submission sync before start when more pages remain", async () => {
@@ -886,6 +1098,103 @@ describe("discord interactions", () => {
     expect(body.type).toBe(4);
     expect(body.data.content).toContain("提出情報の増分同期を開始しました。");
     expect(startRequests).toBe(1);
+  });
+
+  it("asks for retry when immediate incremental sync still needs more batches without a durable object", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 1,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/atcoder-api/v3/user/submissions")) {
+        return Response.json(
+          Array.from({ length: 500 }, (_, index) => ({
+            epoch_second: 1712131200 + index,
+            id: index + 1,
+            problem_id: `abc100_${index}`,
+            result: "AC",
+          })),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "提出情報の増分同期がまだ継続中です。少し待ってからコマンドを再実行してください。",
+    );
   });
 
   it("writes a failed command log when durable object transport fails", async () => {
@@ -1123,6 +1432,79 @@ describe("discord interactions", () => {
     ).resolves.toEqual(
       expect.objectContaining({
         last_error: "submission sync handoff failed",
+        status: "failed",
+      }),
+    );
+  });
+
+  it("marks init sync failed when durable object handoff fails", async () => {
+    const database = createMockDatabase({
+      settingRecord: {
+        atcoder_user_id: "tossyhal",
+      },
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "init",
+          options: [
+            {
+              name: "action",
+              type: 3,
+              value: "run",
+            },
+          ],
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        SUBMISSION_SYNC: {
+          get: () => ({
+            fetch: async () => {
+              throw new Error("init sync handoff failed");
+            },
+          }),
+          idFromName: () => "submission-sync-id",
+        } as unknown as DurableObjectNamespace,
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("初期同期ジョブの開始に失敗しました。");
+    expect(body.data.content).toContain("init sync handoff failed");
+    await expect(
+      database
+        .prepare(
+          `SELECT
+            status,
+            full_sync_completed_at,
+            last_synced_at,
+            last_checkpoint,
+            last_success_checkpoint,
+            last_error
+          FROM sync_states
+          WHERE scope = ?`,
+        )
+        .bind("submissions")
+        .first(),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        last_error: "init sync handoff failed",
         status: "failed",
       }),
     );
@@ -1432,6 +1814,121 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain("ABC=OFF");
     expect(body.data.content).toContain(
       "難易度帯: 800-999: 2問, 1000-1199: 3問",
+    );
+  });
+
+  it("rejects invalid AtCoder user IDs in setting updates", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "setting",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "update",
+          },
+          {
+            name: "atcoder-user-id",
+            type: 3,
+            value: "bad user id",
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "atcoder-user-id は 3〜24 文字の英数字またはアンダースコアで指定してください。",
+    );
+  });
+
+  it("rejects invalid setting actions", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "setting",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "invalid",
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "action は show または update を指定してください。",
+    );
+  });
+
+  it("rejects invalid visibility values in setting updates", async () => {
+    const request = await createSignedDiscordRequest({
+      type: 2,
+      data: {
+        name: "setting",
+        options: [
+          {
+            name: "action",
+            type: 3,
+            value: "update",
+          },
+          {
+            name: "visibility",
+            type: 3,
+            value: "friends-only",
+          },
+        ],
+      },
+    });
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      request.env,
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain(
+      "visibility は private または public を指定してください。",
     );
   });
 });

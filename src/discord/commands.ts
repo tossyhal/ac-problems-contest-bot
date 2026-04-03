@@ -82,6 +82,11 @@ const defaultSettingRecord: SettingRecord = {
   memo_template: null,
 };
 
+const allowedSlotMinutes = new Set([5, 10, 15, 30]);
+const allowedVisibilityValues = new Set(["private", "public"]);
+const atCoderUserIdPattern = /^[A-Za-z0-9_]{3,24}$/;
+const maxImmediateSubmissionSyncBatches = 3;
+
 const booleanLabel = (value: number) => (value ? "ON" : "OFF");
 
 const formatTimestamp = (value: number | null) =>
@@ -154,6 +159,38 @@ const parseDifficultyBands = (value: string) => {
   });
 };
 
+const validateAtCoderUserId = (value: string | null) => {
+  if (value === null) {
+    return value;
+  }
+
+  if (!atCoderUserIdPattern.test(value)) {
+    throw new Error(
+      "atcoder-user-id は 3〜24 文字の英数字またはアンダースコアで指定してください。",
+    );
+  }
+
+  return value;
+};
+
+const validateSlotMinutes = (value: number) => {
+  if (!allowedSlotMinutes.has(value)) {
+    throw new Error(
+      "slot-minutes は 5, 10, 15, 30 のいずれかを指定してください。",
+    );
+  }
+
+  return value;
+};
+
+const validateVisibility = (value: string) => {
+  if (!allowedVisibilityValues.has(value)) {
+    throw new Error("visibility は private または public を指定してください。");
+  }
+
+  return value;
+};
+
 const getSettingRecord = async (database: D1Database) => {
   const result = await database
     .prepare(
@@ -198,30 +235,38 @@ const replaceDifficultyBands = async (
   database: D1Database,
   difficultyBands: DifficultyBandRecord[],
 ) => {
-  await database
-    .prepare(`DELETE FROM setting_difficulty_bands WHERE setting_id = ?`)
-    .bind(1)
-    .run();
+  const statements = [
+    database
+      .prepare(`DELETE FROM setting_difficulty_bands WHERE setting_id = ?`)
+      .bind(1),
+    ...difficultyBands.map((band) =>
+      database
+        .prepare(
+          `INSERT INTO setting_difficulty_bands (
+            setting_id,
+            sort_order,
+            difficulty_min,
+            difficulty_max,
+            problem_count
+          ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          1,
+          band.sort_order ?? 0,
+          band.difficulty_min,
+          band.difficulty_max,
+          band.problem_count,
+        ),
+    ),
+  ];
 
-  for (const band of difficultyBands) {
-    await database
-      .prepare(
-        `INSERT INTO setting_difficulty_bands (
-          setting_id,
-          sort_order,
-          difficulty_min,
-          difficulty_max,
-          problem_count
-        ) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        1,
-        band.sort_order ?? 0,
-        band.difficulty_min,
-        band.difficulty_max,
-        band.problem_count,
-      )
-      .run();
+  if ("batch" in database && typeof database.batch === "function") {
+    await database.batch(statements);
+    return;
+  }
+
+  for (const statement of statements) {
+    await statement.run();
   }
 };
 
@@ -229,12 +274,14 @@ const createUpdatedSettingRecord = (
   currentSetting: SettingRecord,
   interaction: DiscordApplicationCommandInteraction,
 ): SettingRecord => ({
-  atcoder_user_id:
+  atcoder_user_id: validateAtCoderUserId(
     getStringOption(interaction, "atcoder-user-id") ??
-    currentSetting.atcoder_user_id,
-  default_slot_minutes:
+      currentSetting.atcoder_user_id,
+  ),
+  default_slot_minutes: validateSlotMinutes(
     getNumberOption(interaction, "slot-minutes") ??
-    currentSetting.default_slot_minutes,
+      currentSetting.default_slot_minutes,
+  ),
   default_problem_count:
     getNumberOption(interaction, "problem-count") ??
     currentSetting.default_problem_count,
@@ -268,8 +315,9 @@ const createUpdatedSettingRecord = (
   exclude_recently_used_days:
     getNumberOption(interaction, "exclude-recently-used-days") ??
     currentSetting.exclude_recently_used_days,
-  visibility:
+  visibility: validateVisibility(
     getStringOption(interaction, "visibility") ?? currentSetting.visibility,
+  ),
   title_template: currentSetting.title_template,
   memo_template:
     getStringOption(interaction, "memo-template") ??
@@ -373,6 +421,43 @@ const createContestMemo = (setting: SettingRecord, startTime: Date) => {
   return setting.memo_template.replaceAll("{startDateTime}", startDateTime);
 };
 
+const createContestRequestFingerprintPayload = (input: {
+  difficultyBands: DifficultyBandRecord[];
+  memo: string;
+  setting: Pick<
+    SettingRecord,
+    | "allow_other_sources"
+    | "default_contest_duration_minutes"
+    | "default_penalty_seconds"
+    | "default_problem_count"
+    | "exclude_recently_used_days"
+    | "include_abc"
+    | "include_agc"
+    | "include_arc"
+    | "include_experimental_difficulty"
+    | "visibility"
+  >;
+  startEpochSecond: number;
+  unsolvedOnly: boolean;
+  userId: string;
+}) => ({
+  allowOtherSources: input.setting.allow_other_sources,
+  defaultContestDurationMinutes: input.setting.default_contest_duration_minutes,
+  defaultPenaltySeconds: input.setting.default_penalty_seconds,
+  defaultProblemCount: input.setting.default_problem_count,
+  difficultyBands: input.difficultyBands,
+  excludeRecentlyUsedDays: input.setting.exclude_recently_used_days,
+  includeAbc: input.setting.include_abc,
+  includeAgc: input.setting.include_agc,
+  includeArc: input.setting.include_arc,
+  includeExperimentalDifficulty: input.setting.include_experimental_difficulty,
+  memo: input.memo,
+  startEpochSecond: input.startEpochSecond,
+  unsolvedOnly: input.unsolvedOnly,
+  userId: input.userId,
+  visibility: input.setting.visibility,
+});
+
 const getNextStartTime = (slotMinutes: number) => {
   const now = new Date();
   const next = new Date(now.getTime());
@@ -403,9 +488,10 @@ const buildCustomStartSetting = (
   default_problem_count:
     getNumberOption(interaction, "problem-count") ??
     currentSetting.default_problem_count,
-  default_slot_minutes:
+  default_slot_minutes: validateSlotMinutes(
     getNumberOption(interaction, "slot-minutes") ??
-    currentSetting.default_slot_minutes,
+      currentSetting.default_slot_minutes,
+  ),
   exclude_recently_used_days:
     getNumberOption(interaction, "exclude-recently-used-days") ??
     currentSetting.exclude_recently_used_days,
@@ -425,6 +511,7 @@ const buildCustomStartSetting = (
     getBooleanOption(interaction, "include-experimental-difficulty") ??
       Boolean(currentSetting.include_experimental_difficulty),
   ),
+  visibility: validateVisibility(currentSetting.visibility),
 });
 
 const ensureProblemCatalogReady = async (
@@ -568,6 +655,7 @@ const ensureSubmissionSyncReadyForContest = async (
   }
 
   let result: Awaited<ReturnType<typeof syncUserSubmissionsBatch>> | undefined;
+  let batchCount = 0;
 
   do {
     result = await syncUserSubmissionsBatch({
@@ -575,7 +663,19 @@ const ensureSubmissionSyncReadyForContest = async (
       fetchFn: options.fetchFn,
       userId,
     });
-  } while (result.status === "running");
+    batchCount += 1;
+  } while (
+    result.status === "running" &&
+    batchCount < maxImmediateSubmissionSyncBatches
+  );
+
+  if (result.status === "running") {
+    return {
+      message:
+        "提出情報の増分同期がまだ継続中です。少し待ってからコマンドを再実行してください。",
+      ready: false,
+    };
+  }
 
   if (result.status === "failed") {
     const failedState = await getSubmissionSyncState(database);
@@ -639,31 +739,18 @@ const runContestCreation = async (
     const startTime = getNextStartTime(input.setting.default_slot_minutes);
     const startEpochSecond = Math.floor(startTime.getTime() / 1000);
     const memo = createContestMemo(input.setting, startTime);
-    const requestFingerprint = await createHash(
-      JSON.stringify({
-        difficultyBands: input.difficultyBands,
-        excludeRecentlyUsedDays: input.setting.exclude_recently_used_days,
-        startEpochSecond,
-        unsolvedOnly: input.unsolvedOnly,
-        userId: atcoderUserId,
-        visibility: input.setting.visibility,
-        includeAbc: input.setting.include_abc,
-        includeAgc: input.setting.include_agc,
-        includeArc: input.setting.include_arc,
-        includeExperimentalDifficulty:
-          input.setting.include_experimental_difficulty,
-        allowOtherSources: input.setting.allow_other_sources,
-      }),
-    );
-    const settingsSummary = JSON.stringify({
-      allowOtherSources: input.setting.allow_other_sources,
+    const fingerprintPayload = createContestRequestFingerprintPayload({
       difficultyBands: input.difficultyBands,
-      excludeRecentlyUsedDays: input.setting.exclude_recently_used_days,
+      memo,
+      setting: input.setting,
       startEpochSecond,
       unsolvedOnly: input.unsolvedOnly,
       userId: atcoderUserId,
-      visibility: input.setting.visibility,
     });
+    const requestFingerprint = await createHash(
+      JSON.stringify(fingerprintPayload),
+    );
+    const settingsSummary = JSON.stringify(fingerprintPayload);
     const createdContest = options.contestCreationGuard
       ? await options.contestCreationGuard
           .get(options.contestCreationGuard.idFromName(requestFingerprint))
@@ -812,7 +899,7 @@ const handleSetting = async (
 ) => {
   const action = getOptionValue(interaction, "action");
 
-  if (action !== "show") {
+  if (action === "update") {
     try {
       const currentSetting = await getSettingRecord(database);
       const nextSetting = createUpdatedSettingRecord(
@@ -862,6 +949,10 @@ const handleSetting = async (
     }
   }
 
+  if (action !== "show") {
+    return createResponse("action は show または update を指定してください。");
+  }
+
   const setting = await getSettingRecord(database);
   const difficultyBands = await getDifficultyBands(database);
   const problemCatalogCount = await getProblemCatalogStats(database);
@@ -906,10 +997,26 @@ const handleInit = async (
 
     if (options.submissionSync) {
       await markSyncQueued(database);
-      await startSubmissionSyncJob(
-        options.submissionSync,
-        setting.atcoder_user_id,
-      );
+
+      try {
+        await startSubmissionSyncJob(
+          options.submissionSync,
+          setting.atcoder_user_id,
+        );
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "提出同期ジョブの開始に失敗しました。";
+
+        await upsertSyncState(database, {
+          ...(await getSubmissionSyncState(database)),
+          last_error: message,
+          status: "failed",
+        });
+
+        return createResponse(`初期同期ジョブの開始に失敗しました。${message}`);
+      }
 
       return createResponse(
         [
@@ -927,16 +1034,24 @@ const handleInit = async (
     });
 
     const syncState = await getSubmissionSyncState(database);
+    const initStatusMessage =
+      syncState.status === "running"
+        ? "初期同期を1バッチ処理しました。続きがあるため、もう一度 /init action:run を実行してください。"
+        : "初期同期を完了しました。";
 
     return createResponse(
       [
-        "初期同期を完了しました。",
+        initStatusMessage,
         `status: ${syncState.status}`,
         `full sync completed at: ${formatTimestamp(syncState.full_sync_completed_at)}`,
         `last synced at: ${formatTimestamp(syncState.last_synced_at)}`,
         `last checkpoint: ${syncState.last_checkpoint ?? "未設定"}`,
       ].join("\n"),
     );
+  }
+
+  if (action !== "status") {
+    return createResponse("action は run または status を指定してください。");
   }
 
   const syncState = await getSubmissionSyncState(database);
