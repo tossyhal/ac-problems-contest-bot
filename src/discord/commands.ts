@@ -10,6 +10,7 @@ import {
   syncUserSubmissionsBatch,
 } from "../atcoder-problems/submissions";
 import { executeContestCreation } from "../contest-creation/service";
+import { insertCommandLog } from "../db/command-log";
 import { selectProblems } from "../problem-selection/select";
 
 type DiscordCommandOption = {
@@ -417,36 +418,6 @@ const createContestProblemsPayload = (problems: { problem_id: string }[]) =>
     point: (index + 1) * 100,
   }));
 
-const insertCommandLog = async (
-  database: D1Database,
-  input: {
-    commandContext?: string;
-    commandName: string;
-    message?: string;
-    settingsSummary?: string;
-    status: string;
-  },
-) => {
-  await database
-    .prepare(
-      `INSERT INTO command_logs (
-        command_name,
-        command_context,
-        status,
-        settings_summary,
-        message
-      ) VALUES (?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      input.commandName,
-      input.commandContext ?? null,
-      input.status,
-      input.settingsSummary ?? null,
-      input.message ?? null,
-    )
-    .run();
-};
-
 const buildCustomStartSetting = (
   interaction: DiscordApplicationCommandInteraction,
   currentSetting: SettingRecord,
@@ -768,14 +739,12 @@ const runContestCreation = async (
     const message =
       error instanceof Error ? error.message : "バチャ作成に失敗しました。";
 
-    if (!options.contestCreationGuard) {
-      await insertCommandLog(database, {
-        commandContext: input.commandContext,
-        commandName: input.commandName,
-        message,
-        status: "failed",
-      });
-    }
+    await insertCommandLog(database, {
+      commandContext: input.commandContext,
+      commandName: input.commandName,
+      message,
+      status: "failed",
+    });
 
     return createResponse(message);
   }

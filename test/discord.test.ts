@@ -9,8 +9,13 @@ const toHex = (value: ArrayBuffer) =>
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
+const createSha256Hex = async (value: string) =>
+  toHex(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
+
 const createMockDatabase = (
   seed: {
+    commandLogRecords?: Record<string, unknown>[];
+    contestRunRecords?: Record<string, unknown>[];
     difficultyBandRecords?: Record<string, unknown>[];
     problemCatalogRecords?: Record<string, unknown>[];
     problemUsageLogRecords?: Record<string, unknown>[];
@@ -28,10 +33,14 @@ const createMockDatabase = (
   let solvedProblemRecords = [...(seed.solvedProblemRecords ?? [])];
   const problemCatalogRecords = [...(seed.problemCatalogRecords ?? [])];
   const problemUsageLogRecords = [...(seed.problemUsageLogRecords ?? [])];
-  const contestRunRecords: Record<string, unknown>[] = [];
-  const commandLogRecords: Record<string, unknown>[] = [];
+  const contestRunRecords = [...(seed.contestRunRecords ?? [])];
+  const commandLogRecords = [...(seed.commandLogRecords ?? [])];
 
   return {
+    __state: {
+      commandLogRecords,
+      contestRunRecords,
+    },
     batch: async (statements: { run: () => Promise<unknown> }[]) => {
       for (const statement of statements) {
         await statement.run();
@@ -44,6 +53,16 @@ const createMockDatabase = (
         first: async () => {
           if (query.includes("FROM sync_states")) {
             return syncStateRecords[String(params[0])] ?? null;
+          }
+
+          if (query.includes("FROM contest_runs")) {
+            return (
+              contestRunRecords.find(
+                (record) =>
+                  record.request_fingerprint === params[0] &&
+                  record.status === "completed",
+              ) ?? null
+            );
           }
 
           return null;
@@ -246,6 +265,7 @@ const createSignedDiscordRequest = async (
 
 describe("discord interactions", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -423,6 +443,126 @@ describe("discord interactions", () => {
     expect(body.data.content).toContain("開始時刻:");
   }, 10000);
 
+  it("reuses existing contest URL when the same fingerprint already completed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-03T11:01:00.000Z"));
+    const startEpochSecond = Math.floor(
+      new Date("2026-04-03T11:05:00.000Z").getTime() / 1000,
+    );
+    const requestFingerprint = await createSha256Hex(
+      JSON.stringify({
+        difficultyBands: [],
+        problemIds: ["abc100_a"],
+        startEpochSecond,
+        visibility: "private",
+      }),
+    );
+    const database = createMockDatabase({
+      contestRunRecords: [
+        {
+          contest_id: "contest-123",
+          contest_url:
+            "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
+          id: 1,
+          request_fingerprint: requestFingerprint,
+          status: "completed",
+        },
+      ],
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 1,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    let createCalls = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/atcoder-api/v3/user/submissions")) {
+        return Response.json([]);
+      }
+
+      if (url.endsWith("/internal-api/contest/create")) {
+        createCalls += 1;
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("既存のバチャを再利用しました。");
+    expect(body.data.content).toContain(
+      "https://kenkoooo.com/atcoder/#/contest/show/contest-123",
+    );
+    expect(createCalls).toBe(0);
+  });
+
   it("queues incremental submission sync before start when more pages remain", async () => {
     const database = createMockDatabase({
       problemCatalogRecords: [
@@ -530,6 +670,115 @@ describe("discord interactions", () => {
     expect(body.type).toBe(4);
     expect(body.data.content).toContain("提出情報の増分同期を開始しました。");
     expect(startRequests).toBe(1);
+  });
+
+  it("writes a failed command log when durable object transport fails", async () => {
+    const database = createMockDatabase({
+      problemCatalogRecords: [
+        {
+          contest_id: "abc100",
+          difficulty: 850,
+          is_experimental: 0,
+          problem_id: "abc100_a",
+          problem_index: "A",
+          source_category: "ABC",
+          title: "A",
+        },
+      ],
+      settingRecord: {
+        allow_other_sources: 0,
+        atcoder_user_id: "tossyhal",
+        default_contest_duration_minutes: 100,
+        default_penalty_seconds: 300,
+        default_problem_count: 1,
+        default_slot_minutes: 5,
+        exclude_recently_used_days: 14,
+        include_abc: 1,
+        include_agc: 0,
+        include_arc: 0,
+        include_experimental_difficulty: 0,
+        memo_template: null,
+        title_template: null,
+        visibility: "private",
+      },
+      syncStateRecords: {
+        problem_catalog: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "2",
+          last_error: null,
+          last_success_checkpoint: "2",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+        submissions: {
+          full_sync_completed_at: Date.now(),
+          last_checkpoint: "123",
+          last_error: null,
+          last_success_checkpoint: "123",
+          last_synced_at: Date.now(),
+          status: "completed",
+        },
+      },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/atcoder-api/v3/user/submissions")) {
+        return Response.json([]);
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const request = await createSignedDiscordRequest(
+      {
+        type: 2,
+        data: {
+          name: "start",
+        },
+      },
+      database,
+    );
+    const response = await app.request(
+      "http://localhost/discord/interactions",
+      {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+      },
+      {
+        ...request.env,
+        ATCODER_PROBLEMS_TOKEN: "test-token",
+        CONTEST_CREATION_GUARD: {
+          get: () => ({
+            fetch: async () => {
+              throw new Error("durable object transport failed");
+            },
+          }),
+          idFromName: () => "contest-creation-guard-id",
+        } as unknown as DurableObjectNamespace,
+      },
+    );
+    const body = (await response.json()) as {
+      data: { content: string };
+      type: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.type).toBe(4);
+    expect(body.data.content).toContain("durable object transport failed");
+    expect(
+      (
+        database as unknown as {
+          __state: { commandLogRecords: Array<Record<string, unknown>> };
+        }
+      ).__state.commandLogRecords,
+    ).toContainEqual(
+      expect.objectContaining({
+        command_name: "start",
+        message: "durable object transport failed",
+        status: "failed",
+      }),
+    );
   });
 
   it("shows current settings from D1 defaults", async () => {

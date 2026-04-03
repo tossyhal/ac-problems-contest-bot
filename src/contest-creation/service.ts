@@ -1,4 +1,5 @@
 import { createContest } from "../atcoder-problems/contest";
+import { insertCommandLog } from "../db/command-log";
 
 type ContestProblemPayload = {
   id: string;
@@ -115,36 +116,6 @@ const insertProblemUsageLogs = async (
   for (const statement of statements) {
     await statement.run();
   }
-};
-
-const insertCommandLog = async (
-  database: D1Database,
-  input: {
-    commandContext?: string;
-    commandName: string;
-    message?: string;
-    settingsSummary?: string;
-    status: string;
-  },
-) => {
-  await database
-    .prepare(
-      `INSERT INTO command_logs (
-        command_name,
-        command_context,
-        status,
-        settings_summary,
-        message
-      ) VALUES (?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      input.commandName,
-      input.commandContext ?? null,
-      input.status,
-      input.settingsSummary ?? null,
-      input.message ?? null,
-    )
-    .run();
 };
 
 export const findCompletedContestRunByFingerprint = async (
