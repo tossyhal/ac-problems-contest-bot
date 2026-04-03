@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { app } from "../src/app";
 
@@ -160,6 +160,10 @@ const createSignedDiscordRequest = async (
 };
 
 describe("discord interactions", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("rejects unsigned requests", async () => {
     const response = await app.request(
       "http://localhost/discord/interactions",
@@ -291,30 +295,32 @@ describe("discord interactions", () => {
   });
 
   it("runs init and persists sync status", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify([
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          JSON.stringify([
+            {
+              id: 1,
+              epoch_second: 1712131200,
+              problem_id: "abc100_a",
+              result: "AC",
+            },
+            {
+              id: 2,
+              epoch_second: 1712131201,
+              problem_id: "abc100_b",
+              result: "WA",
+            },
+          ]),
           {
-            id: 1,
-            epoch_second: 1712131200,
-            problem_id: "abc100_a",
-            result: "AC",
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
           },
-          {
-            id: 2,
-            epoch_second: 1712131201,
-            problem_id: "abc100_b",
-            result: "WA",
-          },
-        ]),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        },
-      );
+        ),
+    );
     const database = createMockDatabase();
     const updateRequest = await createSignedDiscordRequest(
       {
@@ -375,7 +381,6 @@ describe("discord interactions", () => {
       data: { content: string };
       type: number;
     };
-    globalThis.fetch = originalFetch;
 
     expect(response.status).toBe(200);
     expect(body.type).toBe(4);

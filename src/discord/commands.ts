@@ -473,6 +473,21 @@ const handleInit = async (
       );
     }
 
+    const currentSyncState = await getSubmissionSyncState(database);
+
+    if (
+      currentSyncState.status === "queued" ||
+      currentSyncState.status === "running"
+    ) {
+      return createResponse(
+        [
+          "初期同期はすでに実行中です。",
+          `status: ${currentSyncState.status}`,
+          "進捗と結果は /init action:status で確認してください。",
+        ].join("\n"),
+      );
+    }
+
     if (options.submissionSync) {
       await markSyncQueued(database);
       const stub = options.submissionSync.get(

@@ -48,26 +48,33 @@ export class SubmissionSyncDurableObject extends DurableObject<SubmissionSyncEnv
   }
 
   override async alarm() {
-    const job = await this.ctx.storage.get<SubmissionSyncJob>(jobStorageKey);
+    try {
+      const job = await this.ctx.storage.get<SubmissionSyncJob>(jobStorageKey);
 
-    if (!job) {
-      return;
+      if (!job) {
+        return;
+      }
+
+      console.log("[sync-do] alarm fired", {
+        userId: job.userId,
+      });
+
+      const result = await syncUserSubmissionsBatch({
+        database: this.env.DB,
+        userId: job.userId,
+      });
+
+      if (result.status === "running") {
+        await this.ctx.storage.setAlarm(Date.now() + alarmDelayMs);
+        return;
+      }
+
+      await this.ctx.storage.delete(jobStorageKey);
+    } catch (error) {
+      console.error("[sync-do] alarm failed", {
+        error: error instanceof Error ? error.message : error,
+      });
+      throw error;
     }
-
-    console.log("[sync-do] alarm fired", {
-      userId: job.userId,
-    });
-
-    const result = await syncUserSubmissionsBatch({
-      database: this.env.DB,
-      userId: job.userId,
-    });
-
-    if (result.status === "running") {
-      await this.ctx.storage.setAlarm(Date.now() + alarmDelayMs);
-      return;
-    }
-
-    await this.ctx.storage.delete(jobStorageKey);
   }
 }
