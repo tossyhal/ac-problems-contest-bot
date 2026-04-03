@@ -32,6 +32,9 @@ type SettingRecord = {
 };
 
 type DifficultyBandRecord = {
+  id?: number;
+  setting_id?: number;
+  sort_order?: number;
   difficulty_min: number;
   difficulty_max: number;
   problem_count: number;
@@ -100,6 +103,41 @@ const getBooleanOption = (
   return typeof value === "boolean" ? value : undefined;
 };
 
+const parseDifficultyBands = (value: string) => {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized.split(",").map((rawBand, index) => {
+    const band = rawBand.trim();
+    const match = band.match(/^(\d+)-(\d+):(\d+)$/);
+
+    if (!match) {
+      throw new Error(
+        "difficulty-bands は 800-999:2,1000-1199:2 の形式で指定してください。",
+      );
+    }
+
+    const [, min, max, count] = match;
+    const difficultyMin = Number(min);
+    const difficultyMax = Number(max);
+    const problemCount = Number(count);
+
+    if (difficultyMin > difficultyMax) {
+      throw new Error("difficulty-bands の下限は上限以下にしてください。");
+    }
+
+    return {
+      sort_order: index,
+      difficulty_min: difficultyMin,
+      difficulty_max: difficultyMax,
+      problem_count: problemCount,
+    };
+  });
+};
+
 const getSettingRecord = async (database: D1Database) => {
   const result = await database
     .prepare(
@@ -129,7 +167,7 @@ const getSettingRecord = async (database: D1Database) => {
 const getDifficultyBands = async (database: D1Database) => {
   const result = await database
     .prepare(
-      `SELECT difficulty_min, difficulty_max, problem_count
+      `SELECT id, setting_id, sort_order, difficulty_min, difficulty_max, problem_count
       FROM setting_difficulty_bands
       WHERE setting_id = 1
       ORDER BY sort_order ASC`,
@@ -167,6 +205,37 @@ const getSyncState = async (database: D1Database) => {
   );
 };
 
+const replaceDifficultyBands = async (
+  database: D1Database,
+  difficultyBands: DifficultyBandRecord[],
+) => {
+  await database
+    .prepare(`DELETE FROM setting_difficulty_bands WHERE setting_id = ?`)
+    .bind(1)
+    .run();
+
+  for (const band of difficultyBands) {
+    await database
+      .prepare(
+        `INSERT INTO setting_difficulty_bands (
+          setting_id,
+          sort_order,
+          difficulty_min,
+          difficulty_max,
+          problem_count
+        ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        1,
+        band.sort_order ?? 0,
+        band.difficulty_min,
+        band.difficulty_max,
+        band.problem_count,
+      )
+      .run();
+  }
+};
+
 const createUpdatedSettingRecord = (
   currentSetting: SettingRecord,
   interaction: DiscordApplicationCommandInteraction,
@@ -181,7 +250,7 @@ const createUpdatedSettingRecord = (
     getNumberOption(interaction, "problem-count") ??
     currentSetting.default_problem_count,
   default_contest_duration_minutes:
-    getNumberOption(interaction, "contest-duration-minutes") ??
+    getNumberOption(interaction, "contest-minutes") ??
     currentSetting.default_contest_duration_minutes,
   default_penalty_seconds:
     getNumberOption(interaction, "penalty-seconds") ??
@@ -333,10 +402,7 @@ const handleCustomStart = (
   interaction: DiscordApplicationCommandInteraction,
 ) => {
   const problemCount = getOptionValue(interaction, "problem-count");
-  const contestDurationMinutes = getOptionValue(
-    interaction,
-    "contest-duration-minutes",
-  );
+  const contestDurationMinutes = getOptionValue(interaction, "contest-minutes");
   const slotMinutes = getOptionValue(interaction, "slot-minutes");
   const unsolvedOnly = getOptionValue(interaction, "unsolved-only");
   const includeExperimentalDifficulty = getOptionValue(
@@ -363,28 +429,51 @@ const handleSetting = async (
   const action = getOptionValue(interaction, "action");
 
   if (action !== "show") {
-    const currentSetting = await getSettingRecord(database);
-    const nextSetting = createUpdatedSettingRecord(currentSetting, interaction);
+    try {
+      const currentSetting = await getSettingRecord(database);
+      const nextSetting = createUpdatedSettingRecord(
+        currentSetting,
+        interaction,
+      );
+      const difficultyBandsInput = getStringOption(
+        interaction,
+        "difficulty-bands",
+      );
+      const nextDifficultyBands =
+        difficultyBandsInput === undefined
+          ? await getDifficultyBands(database)
+          : parseDifficultyBands(difficultyBandsInput);
 
-    const hasChanges =
-      JSON.stringify(currentSetting) !== JSON.stringify(nextSetting);
+      const currentDifficultyBands = await getDifficultyBands(database);
+      const hasChanges =
+        JSON.stringify(currentSetting) !== JSON.stringify(nextSetting) ||
+        JSON.stringify(currentDifficultyBands) !==
+          JSON.stringify(nextDifficultyBands);
 
-    if (!hasChanges) {
+      if (!hasChanges) {
+        return createResponse(
+          "更新対象が指定されていません。action=update と一緒に更新項目を渡してください。",
+        );
+      }
+
+      await upsertSettingRecord(database, nextSetting);
+      if (difficultyBandsInput !== undefined) {
+        await replaceDifficultyBands(database, nextDifficultyBands);
+      }
+
+      const difficultyBands = await getDifficultyBands(database);
+
       return createResponse(
-        "更新対象が指定されていません。action=update と一緒に更新項目を渡してください。",
+        [
+          "デフォルト設定を更新しました。",
+          ...createSettingSummary(nextSetting, difficultyBands),
+        ].join("\n"),
+      );
+    } catch (error) {
+      return createResponse(
+        error instanceof Error ? error.message : "設定更新に失敗しました。",
       );
     }
-
-    await upsertSettingRecord(database, nextSetting);
-
-    const difficultyBands = await getDifficultyBands(database);
-
-    return createResponse(
-      [
-        "デフォルト設定を更新しました。",
-        ...createSettingSummary(nextSetting, difficultyBands),
-      ].join("\n"),
-    );
   }
 
   const setting = await getSettingRecord(database);

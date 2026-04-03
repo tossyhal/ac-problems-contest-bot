@@ -18,7 +18,7 @@ const commandDefinitions = [
       },
       {
         type: 4,
-        name: "contest-duration-minutes",
+        name: "contest-minutes",
         description: "コンテスト時間を分単位で上書きする",
         min_value: 10,
         max_value: 600,
@@ -86,10 +86,15 @@ const commandDefinitions = [
       },
       {
         type: 4,
-        name: "contest-duration-minutes",
+        name: "contest-minutes",
         description: "コンテスト時間を更新する",
         min_value: 10,
         max_value: 600,
+      },
+      {
+        type: 3,
+        name: "difficulty-bands",
+        description: "難易度帯を 800-999:2,1000-1199:2 の形式で更新する",
       },
       {
         type: 4,

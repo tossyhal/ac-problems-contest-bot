@@ -11,6 +11,7 @@ const toHex = (value: ArrayBuffer) =>
 
 const createMockDatabase = () => {
   let settingRecord: null | Record<string, unknown> = null;
+  let difficultyBandRecords: Record<string, unknown>[] = [];
 
   return {
     prepare: (query: string) => ({
@@ -45,6 +46,20 @@ const createMockDatabase = () => {
             };
           }
 
+          if (query.includes("DELETE FROM setting_difficulty_bands")) {
+            difficultyBandRecords = [];
+          }
+
+          if (query.includes("INSERT INTO setting_difficulty_bands")) {
+            difficultyBandRecords.push({
+              setting_id: params[0],
+              sort_order: params[1],
+              difficulty_min: params[2],
+              difficulty_max: params[3],
+              problem_count: params[4],
+            });
+          }
+
           return { success: true };
         },
       }),
@@ -55,7 +70,13 @@ const createMockDatabase = () => {
 
         return null;
       },
-      all: async () => ({ results: [] }),
+      all: async () => {
+        if (query.includes("FROM setting_difficulty_bands")) {
+          return { results: difficultyBandRecords };
+        }
+
+        return { results: [] };
+      },
     }),
   } as unknown as D1Database;
 };
@@ -239,14 +260,19 @@ describe("discord interactions", () => {
             value: "tossyhal",
           },
           {
-            name: "problem-count",
+            name: "contest-minutes",
             type: 4,
-            value: 7,
+            value: 120,
           },
           {
             name: "include-abc",
             type: 5,
             value: false,
+          },
+          {
+            name: "difficulty-bands",
+            type: 3,
+            value: "800-999:2,1000-1199:3",
           },
         ],
       },
@@ -269,7 +295,10 @@ describe("discord interactions", () => {
     expect(body.type).toBe(4);
     expect(body.data.content).toContain("デフォルト設定を更新しました。");
     expect(body.data.content).toContain("AtCoder user ID: tossyhal");
-    expect(body.data.content).toContain("問題数: 7");
+    expect(body.data.content).toContain("コンテスト時間: 120分");
     expect(body.data.content).toContain("ABC=OFF");
+    expect(body.data.content).toContain(
+      "難易度帯: 800-999: 2問, 1000-1199: 3問",
+    );
   });
 });
